@@ -23,6 +23,18 @@ que é o que diferencia muitas palavras em Libras. Mudanças:
   quando ela sai do quadro ou fica parada ~1 s (`libres_realtime.py`).
 - `libras_camera.py`: um app só para **alfabeto e palavras** (tecla `M`).
 
+### Coletar palavras pela webcam (dataset próprio, sem MINDS)
+
+```bash
+python coletar_palavras.py --sinalizador 1
+python coletar_palavras.py --sinalizador 2 --palavras oi,obrigado,tchau --takes 15
+```
+
+Cada pessoa usa sempre o mesmo número de sinalizador. Faça o sinal e abaixe
+a mão: o take é salvo sozinho em `coletados/<palavra>/SinalizadorNN_<palavra>_NNN.npy`.
+Pastas `coletados/` de computadores diferentes podem ser juntadas (os nomes não
+colidem). Depois: `python train_rotulado.py` e `python eval_loso.py`.
+
 **Ordem para rodar depois de atualizar** (o modelo antigo não é compatível):
 
 ```bash
