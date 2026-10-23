@@ -49,7 +49,7 @@ print("TREINO ALFABETO - Random Forest (poses estaticas)")
 print("=" * 60)
 
 landmarker = HandLandmarker.create_from_options(HandLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path=str(HAND_MODEL)),
+    base_options=BaseOptions(model_asset_buffer=HAND_MODEL.read_bytes()),
     num_hands=1,
     running_mode=VisionRunningMode.IMAGE,
     min_hand_detection_confidence=0.5,

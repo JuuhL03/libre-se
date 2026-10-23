@@ -32,7 +32,7 @@ VisionRunningMode = mp.tasks.vision.RunningMode
 
 def init_landmarker():
     opts = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(HAND_MODEL)),
+        base_options=BaseOptions(model_asset_buffer=HAND_MODEL.read_bytes()),
         num_hands=2,
         running_mode=VisionRunningMode.IMAGE,
         min_hand_detection_confidence=0.3,
