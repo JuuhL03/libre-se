@@ -4,6 +4,37 @@ Reconhecimento de sinais em **Libras** (Língua Brasileira de Sinais) usando vis
 
 Extrai landmarks das mãos com **MediaPipe Hands**, calcula features temporais (estatísticas, ângulos dos dedos, distâncias relativas) e classifica com **XGBoost**.
 
+## ⚡ v2 — palavras funcionando (outubro/2026)
+
+O reconhecimento de **palavras** não funcionava porque a normalização zerava
+o punho em todo frame: o modelo via só o formato da mão e não o **movimento**,
+que é o que diferencia muitas palavras em Libras. Mudanças:
+
+- `libres_features.py`: sequências de palavra agora têm 65 valores por frame
+  (63 da forma da mão + trajetória x/y do punho em "tamanhos de mão") e
+  15 features novas de movimento. O alfabeto continua exatamente igual.
+- O sinal **inteiro** é reamostrado para 30 frames (antes: só os 30 primeiros).
+- `integrate_minds.py`: 1 arquivo por vídeo do MINDS (antes: blocos de 30
+  frames, muitos só com a mão subindo/descendo).
+- "barulho" e "ruim" voltaram a ser treinados (são sinais reais do MINDS).
+- Augmentation com espelhamento (webcam espelhada × MINDS, canhotos) e
+  variação da amplitude do movimento.
+- Na câmera, o sinal é segmentado: começa quando a mão aparece e termina
+  quando ela sai do quadro ou fica parada ~1 s (`libres_realtime.py`).
+- `libras_camera.py`: um app só para **alfabeto e palavras** (tecla `M`).
+
+**Ordem para rodar depois de atualizar** (o modelo antigo não é compatível):
+
+```bash
+python integrate_minds.py      # regera coletados/ a partir do CSV do MINDS
+python train_rotulado.py       # treina o modelo de palavras v2
+python eval_loso.py            # acurácia por sinalizante (métrica do TCC)
+python libras_camera.py        # câmera: alfabeto + palavras
+```
+
+Na câmera, modo PALAVRAS: comece com a mão fora do quadro, faça o sinal e
+abaixe a mão.
+
 ## Funcionalidades
 
 - Reconhecimento de letras do alfabeto (A-Z), números (1-10) e palavras específicas em Libras

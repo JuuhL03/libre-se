@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Teste em tempo real com camera - XGBoost + confianca.
-Usa predict_proba() e exibe "DESCONHECIDO" quando confianca < 80%.
+Teste em tempo real com camera - so PALAVRAS (XGBoost v2).
+
+Faca o sinal e ABAIXE a mao (ou segure parado ~1 s): o sinal inteiro e
+classificado de uma vez. Para alfabeto + palavras juntos use libras_camera.py.
 """
 
 import sys
@@ -9,33 +11,30 @@ from pathlib import Path
 from typing import Optional
 import mediapipe as mp
 import cv2
-import pickle
 import numpy as np
-from collections import deque
 
-from libres_features import (N_FRAMES, FEAT_DIM,
-                             normalize_landmarks, compute_enhanced_features)
+from libres_features import FEAT_DIM
+from libres_realtime import SignSegmenter, WordRecognizer, accept_word
 
 PROJECT_DIR = Path(__file__).parent
 MODEL_PATH = PROJECT_DIR / "modelo_rotulado_xgb.pkl"
 HAND_MODEL = PROJECT_DIR / "hand_landmarker.task"
 if not HAND_MODEL.exists():
     HAND_MODEL = Path.home() / "hand_landmarker.task"
-CONFIDENCE_THRESHOLD: float = 0.7
-MARGIN_THRESHOLD: float = 0.3
+CONFIDENCE_THRESHOLD: float = 0.45
+MARGIN_THRESHOLD: float = 0.15
 
 print("=" * 50)
 print("PREDICAO EM TEMPO REAL - MODELO OTIMIZADO")
 print("=" * 50)
 
 print("Carregando modelo...")
-with open(MODEL_PATH, 'rb') as f:
-    data = pickle.load(f)
-model = data['model']
-scaler = data['scaler']
-le = data['label_encoder']
+try:
+    recognizer = WordRecognizer(MODEL_PATH)
+except RuntimeError as e:
+    sys.exit(str(e))
 
-print(f"Classes: {list(le.classes_)}")
+print(f"Classes: {recognizer.classes}")
 
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -70,12 +69,11 @@ else:
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-window: deque = deque(maxlen=N_FRAMES)
-frame_count: int = 0
-last_pred: str = ""
-pred_count: int = 0
+segmenter = SignSegmenter()
+top: list[tuple[str, float]] = []
+prediction: str = ""
 
-print("\n>>> FACA UM SINAL EM LIBRAS EM FRENTE A CAMERA <<<")
+print("\n>>> FACA UM SINAL EM LIBRAS E ABAIXE A MAO <<<")
 print("Pressione 'q' para sair")
 print("-" * 40)
 
@@ -89,74 +87,38 @@ while True:
     mp_image = mp.Image(mp.ImageFormat.SRGB, data=rgb)
     result = landmarker.detect(mp_image)
 
-    features_list: list[float] = []
-    hand_detected = False
+    lm = None
     if result and result.hand_landmarks:
         hand = result.hand_landmarks[0]
-        for lm in hand:
-            features_list.extend([lm.x, lm.y, lm.z])
-        hand_detected = True
-
+        lm = np.array([c for p in hand for c in (p.x, p.y, p.z)])
         h, w = frame.shape[:2]
-        for lm in hand:
-            cx, cy = int(lm.x * w), int(lm.y * h)
-            cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)
+        for p in hand:
+            cv2.circle(frame, (int(p.x * w), int(p.y * h)), 5, (0, 255, 0), -1)
 
-    window.append(features_list if len(features_list) == FEAT_DIM else None)
+    sinal = segmenter.update(lm if lm is not None and len(lm) == FEAT_DIM else None)
+    if sinal is not None:
+        top = recognizer.predict(sinal)
+        ok = accept_word(top, CONFIDENCE_THRESHOLD, MARGIN_THRESHOLD)
+        prediction = ok.upper() if ok else "DESCONHECIDO"
+        print(f"  {len(sinal)} frames -> " +
+              ", ".join(f"{p} {c*100:.0f}%" for p, c in top))
 
-    prediction: str = ""
-    confidence: float = 0.0
-
-    if hand_detected and len(window) == N_FRAMES and all(f is not None for f in window):
-        seq = np.array(window)
-        seq = normalize_landmarks(seq)
-        feat = compute_enhanced_features(seq).reshape(1, -1)
-        feat_scaled = scaler.transform(feat)
-        try:
-            probas = model.predict_proba(feat_scaled)[0]
-            pred_idx = int(np.argmax(probas))
-            conf = float(probas[pred_idx])
-
-            # Threshold adaptativo: exige que a margem entre a top-1 e a
-            # segunda probabilidade seja grande, evitando falsos positivos
-            # quando o modelo "chuta" uma classe com pouca conviccao.
-            probas_sorted = np.sort(probas)[::-1]
-            margin = probas_sorted[0] - probas_sorted[1]
-
-            if conf >= CONFIDENCE_THRESHOLD and margin >= MARGIN_THRESHOLD:
-                palavra = le.inverse_transform([pred_idx])[0]
-                if palavra == last_pred:
-                    pred_count += 1
-                else:
-                    last_pred = palavra
-                    pred_count = 1
-                if pred_count >= 3:
-                    prediction = palavra.upper()
-                    confidence = conf
-            else:
-                last_pred = ""
-                pred_count = 0
-                prediction = "DESCONHECIDO"
-                confidence = conf
-        except Exception as e:
-            print(f"Erro na predicao: {e}")
+    if segmenter.recording:
+        cv2.putText(frame, f"gravando... {segmenter.n_frames}", (50, 160),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
     if prediction:
-        if prediction == "DESCONHECIDO":
-            cv2.putText(frame, ">>> DESCONHECIDO", (50, 100),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
-        else:
-            cv2.putText(frame, f">>> {prediction} ({confidence*100:.0f}%)",
-                        (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 255, 0), 4)
+        cor = (0, 0, 255) if prediction == "DESCONHECIDO" else (0, 255, 0)
+        conf = f" ({top[0][1]*100:.0f}%)" if prediction != "DESCONHECIDO" else ""
+        cv2.putText(frame, f">>> {prediction}{conf}", (50, 100),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.6, cor, 4)
 
     cv2.putText(frame, "Q = Sair", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-    cv2.imshow('Libras - Reconhecimento Otimizado', frame)
+    cv2.imshow('Libras - Reconhecimento de Palavras', frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-
-    frame_count += 1
 
 cap.release()
 cv2.destroyAllWindows()

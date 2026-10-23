@@ -19,7 +19,9 @@ from sklearn.metrics import accuracy_score, classification_report
 import xgboost as xgb
 
 from libres_features import (N_FRAMES, N_LANDMARKS, N_COORDS, FEAT_DIM,
-                              normalize_landmarks, compute_finger_angles,
+                              SEQ_DIM, FEATURE_VERSION, X_COLS,
+                              normalize_landmarks, normalize_sequence,
+                              mirror_sequence, compute_finger_angles,
                               add_relative_features, compute_enhanced_features)
 
 PROJECT_DIR = Path(__file__).parent
@@ -35,6 +37,10 @@ OUTPUT_MODEL = PROJECT_DIR / "modelo_rotulado_xgb.pkl"
 AUG_MULTIPLIER: int = 8
 CONFIDENCE_THRESHOLD: float = 0.8
 MIN_SAMPLES_PER_CLASS: int = 5
+# frames com mao detectada necessarios para um video/take valer como sinal
+MIN_HAND_FRAMES: int = 8
+# limite de leitura por video (evita videos longos travarem a extracao)
+MAX_VIDEO_FRAMES: int = 300
 
 random.seed(42)
 np.random.seed(42)
@@ -72,10 +78,11 @@ LABEL_FIXES: dict[str, str] = {
 }
 
 
-# Classes consideradas ruido/lixo: nao sao sinais reais de Libras e so
-# adicionam confusao. Sao descartadas durante a normalizacao dos labels.
+# Classes descartadas. ATENCAO: 'barulho' e 'ruim' SAO sinais reais do
+# MINDS-Libras (20 sinais) e voltaram a ser treinados; antes eram jogados fora
+# como se fossem ruido.
 DROP_LABELS: set[str] = {
-    'barulho', 'com_license', 'ruim',
+    'com_license',
 }
 
 
@@ -142,12 +149,17 @@ def extract_label_youtube(filename: Path) -> Optional[str]:
 
 
 def extract_landmarks_from_video(video_path: Path) -> Optional[np.ndarray]:
+    """Le o video INTEIRO (ate MAX_VIDEO_FRAMES), guarda os frames com mao e
+    devolve o sinal completo reamostrado: (N_FRAMES, SEQ_DIM).
+
+    Antes pegava so os 30 primeiros frames com mao -- em video de 30 fps
+    isso e o primeiro segundo, normalmente so a mao subindo.
+    """
     cap = cv2.VideoCapture(str(video_path))
     frames = []
     total_read = 0
-    max_total_read = N_FRAMES * 2
 
-    while len(frames) < N_FRAMES and total_read < max_total_read:
+    while total_read < MAX_VIDEO_FRAMES:
         ret, frame = cap.read()
         if not ret:
             break
@@ -161,12 +173,9 @@ def extract_landmarks_from_video(video_path: Path) -> Optional[np.ndarray]:
                 frames.append([coord for lm in hand for coord in (lm.x, lm.y, lm.z)])
 
     cap.release()
-    if not frames:
+    if len(frames) < MIN_HAND_FRAMES:
         return None
-    while len(frames) < N_FRAMES:
-        frames.append(frames[-1])
-    seq = np.array(frames[:N_FRAMES])
-    return normalize_landmarks(seq)
+    return normalize_sequence(np.array(frames))
 
 
 def augment_sequence(seq: np.ndarray) -> list[np.ndarray]:
@@ -183,6 +192,15 @@ def augment_sequence(seq: np.ndarray) -> list[np.ndarray]:
         # entao deslocar tudo criaria uma distribuicao que nunca ocorre.
         scale = np.random.uniform(0.92, 1.08)
         aug *= scale
+
+        if D == SEQ_DIM:
+            # amplitude do movimento varia entre pessoas (gestos maiores ou
+            # menores): escala so a trajetoria do punho
+            aug[:, FEAT_DIM:] *= np.random.uniform(0.75, 1.25)
+
+        # espelhamento: webcam com flip x video normal (MINDS) e canhotos
+        if np.random.random() < 0.5:
+            aug = mirror_sequence(aug)
 
         if np.random.random() < 0.4:
             t_warp = np.random.uniform(0.85, 1.15)
@@ -235,8 +253,11 @@ def collect_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             npy_files = sorted(pasta.glob("*.npy"))
             for npy_f in npy_files:
                 seq = np.load(npy_f)
-                if seq.shape == (N_FRAMES, FEAT_DIM):
-                    seq = normalize_landmarks(seq)
+                # .npy guardam landmarks CRUS (T, 63), com T qualquer:
+                # takes da webcam (30) ou o video MINDS inteiro (v2)
+                if seq.ndim == 2 and seq.shape[1] == FEAT_DIM \
+                        and len(seq) >= MIN_HAND_FRAMES:
+                    seq = normalize_sequence(seq)
                     X_raw.append(seq)
                     y_raw_labels.append(label)
                     m = re.match(r'^minds_(.+)_seg\d+$', npy_f.stem)
@@ -316,6 +337,10 @@ def build_feature_names() -> list[str]:
     for d in range(10):
         for stat in ['ang_media', 'ang_std', 'ang_range', 'ang_diff', 'ang_veloc']:
             names.append(f"ang{d}_{stat}")
+    for eixo in ['x', 'y']:
+        for stat in ['std', 'range', 'diff', 'veloc', 'terco1', 'terco2', 'terco3']:
+            names.append(f"traj{eixo}_{stat}")
+    names.append("traj_caminho")
     return names
 
 
@@ -499,6 +524,8 @@ def main() -> None:
         'feature_names': build_feature_names(),
         'n_frames': N_FRAMES,
         'feat_dim': FEAT_DIM,
+        'seq_dim': SEQ_DIM,
+        'feature_version': FEATURE_VERSION,
     }
     with open(OUTPUT_MODEL, 'wb') as f:
         pickle.dump(data, f)

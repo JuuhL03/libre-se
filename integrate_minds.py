@@ -49,9 +49,22 @@ with open(MINDS_CSV) as f:
 print(f"Total videos: {len(videos)}")
 
 print("\nProcessando videos...")
+
+# Remove os segmentos gerados pela versao antiga (blocos de 30 frames).
+# Sao arquivos derivados do CSV: nada se perde, sao regerados abaixo.
+antigos = list(OUTPUT_DIR.glob("*/minds_*_seg*.npy")) if OUTPUT_DIR.exists() else []
+if antigos:
+    print(f"  removendo {len(antigos)} segmentos antigos (minds_*_seg*.npy)")
+    for f in antigos:
+        f.unlink()
+
 total_salvos = 0
 classes_salvas = set()
 
+# v2: UM arquivo por video, com o sinal INTEIRO (todos os frames com mao).
+# A versao antiga cortava o video em blocos de 30 frames e dava o rotulo da
+# palavra a todos -- inclusive a blocos que eram so a mao subindo/descendo.
+# O treino agora reamostra cada sinal completo para 30 frames.
 for vname, vdata in videos.items():
     label = vdata['category'].lower().replace(' ', '_')
     frames = np.array(vdata['frames'])
@@ -60,28 +73,20 @@ for vname, vdata in videos.items():
     if len(valid_frames) < 10:
         continue
 
-    n_segments = max(1, len(valid_frames) // N_FRAMES)
-    for seg in range(n_segments):
-        start = seg * N_FRAMES
-        end = start + N_FRAMES
-        segment = valid_frames[start:end]
+    pasta = OUTPUT_DIR / label
+    pasta.mkdir(parents=True, exist_ok=True)
 
-        if len(segment) < N_FRAMES:
-            pad = np.tile(segment[-1:], (N_FRAMES - len(segment), 1))
-            segment = np.vstack([segment, pad])
-
-        pasta = OUTPUT_DIR / label
-        pasta.mkdir(parents=True, exist_ok=True)
-
-        fname = pasta / f"minds_{Path(vname).stem}_seg{seg:03d}.npy"
-        np.save(fname, np.array(segment[:N_FRAMES]))
-        total_salvos += 1
-        classes_salvas.add(label)
+    # nome mantem o sufixo _seg000 para o agrupamento por sinalizador
+    # (eval_loso / train_lstm) continuar funcionando
+    fname = pasta / f"minds_{Path(vname).stem}_seg000.npy"
+    np.save(fname, valid_frames.astype(np.float32))
+    total_salvos += 1
+    classes_salvas.add(label)
 
 print(f"\nResumo:")
-print(f"  Total segmentos salvos: {total_salvos}")
+print(f"  Total videos salvos: {total_salvos}")
 print(f"  Classes: {len(classes_salvas)}")
 for c in sorted(classes_salvas):
     pasta = OUTPUT_DIR / c
     n = len(list(pasta.glob("minds_*.npy")))
-    print(f"    {c}: {n} segmentos")
+    print(f"    {c}: {n} videos")
