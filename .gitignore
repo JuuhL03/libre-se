@@ -14,3 +14,5 @@ venv/
 *.tar.gz
 *.zip
 *.rar
+minds_videos/
+minds/

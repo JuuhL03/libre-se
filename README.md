@@ -23,6 +23,19 @@ que é o que diferencia muitas palavras em Libras. Mudanças:
   quando ela sai do quadro ou fica parada ~1 s (`libres_realtime.py`).
 - `libras_camera.py`: um app só para **alfabeto e palavras** (tecla `M`).
 
+### Sem o CSV do MINDS? Extraia direto dos vídeos
+
+Baixe os ZIPs dos sinalizadores em https://zenodo.org/records/2667329 (não precisa
+de todos; 4 já bastam para treinar e avaliar), coloque em `minds_videos/` e rode:
+
+```bash
+python extrair_minds_videos.py
+python train_rotulado.py
+```
+
+Não precisa descompactar: o script lê os vídeos de dentro dos ZIPs. Pode
+interromper e rodar de novo; o que já foi processado é pulado.
+
 ### Coletar palavras pela webcam (dataset próprio, sem MINDS)
 
 ```bash
