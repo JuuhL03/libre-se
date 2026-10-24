@@ -107,7 +107,8 @@ def carregar_coleta() -> tuple[list, list, list]:
         letra = pasta.name.upper()
         for arq in sorted(pasta.glob("*.npy")):
             arr = np.load(arq).astype(np.float64).reshape(-1, FEAT_DIM)
-            m = re.match(r"(Pessoa\d+)_", arq.name)
+            # <fonte>_<LETRA>_nnn.npy  (fonte = PessoaNN, roboflow, mendeley...)
+            m = re.match(r"(.+?)_[A-Z]_\d+\.npy$", arq.name)
             grupo = m.group(1) if m else "coleta_antiga"
             for pose in normalize_landmarks(arr):
                 X.append(pose); y.append(letra); g.append(grupo)

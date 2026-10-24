@@ -48,6 +48,14 @@ python train_alfabeto.py                  # usa coleta_alfabeto/ (+ palavras2/, 
 
 Com 2 ou mais pessoas, o treino mostra a acurácia testando em quem ficou fora.
 
+Sem poder gravar? Importe imagens de datasets públicos (pasta por letra ou
+export YOLO do Roboflow) e treine:
+
+```bash
+python importar_imagens_alfabeto.py --pasta CAMINHO --nome roboflow
+python train_alfabeto.py
+```
+
 ### Coletar palavras pela webcam (dataset próprio, sem MINDS)
 
 ```bash
