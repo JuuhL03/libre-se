@@ -89,62 +89,110 @@ def extract_static_poses(video: Path) -> np.ndarray:
     return seq[keep].reshape(-1, FEAT_DIM)
 
 
+COLETA_DIR = PROJECT_DIR / "coleta_alfabeto"
+
+
+def carregar_coleta() -> tuple[list, list, list]:
+    """coleta_alfabeto/<LETRA>/PessoaNN_<LETRA>_nnn.npy (coletar_alfabeto.py).
+
+    Aceita tambem o formato antigo do alphabet_camera.py (uma pose media 21x3).
+    Retorna poses normalizadas, letras e o grupo (pessoa) de cada pose.
+    """
+    import re
+    X, y, g = [], [], []
+    if not COLETA_DIR.exists():
+        return X, y, g
+    for pasta in sorted(p for p in COLETA_DIR.iterdir() if p.is_dir()):
+        letra = pasta.name.upper()
+        for arq in sorted(pasta.glob("*.npy")):
+            arr = np.load(arq).astype(np.float64).reshape(-1, FEAT_DIM)
+            m = re.match(r"(Pessoa\d+)_", arq.name)
+            grupo = m.group(1) if m else "coleta_antiga"
+            for pose in normalize_landmarks(arr):
+                X.append(pose); y.append(letra); g.append(grupo)
+    return X, y, g
+
+
+def espelhar(X: np.ndarray) -> np.ndarray:
+    out = X.copy()
+    out[:, 0::N_COORDS] *= -1
+    return out
+
+
+def novo_modelo():
+    return RandomForestClassifier(n_estimators=300, max_depth=None, min_samples_leaf=2,
+                                  n_jobs=-1, random_state=42)
+
+
 def main() -> None:
-    videos = sorted(v for v in PALAVRAS_DIR.glob("*.mp4")
-                    if len(v.stem) == 1 and v.stem.isalpha())
-    print(f"\n[1/3] Extraindo poses estaticas de {len(videos)} videos de letra...")
-
     X, y, groups = [], [], []
-    for v in videos:
-        letter = v.stem.upper()
-        poses = extract_static_poses(v)
-        print(f"    {letter}: {len(poses):3d} poses de {v.name}")
-        for p in poses:
-            X.append(p)
-            y.append(letter)
-            groups.append(str(v))  # 1 grupo por video: split honesto N/A
 
-    X = np.array(X)
-    y = np.array(y)
-    print(f"\n  Total: {len(X)} poses, {len(np.unique(y))} letras")
+    print("\n[1/3] Carregando dados...")
+    Xc, yc, gc = carregar_coleta()
+    if Xc:
+        print(f"  coleta_alfabeto/: {len(Xc)} poses de {len(set(gc))} pessoa(s): "
+              f"{', '.join(sorted(set(gc)))}")
+    X += Xc; y += yc; groups += gc
 
-    # Split aleatorio simples: os frames de um mesmo video sao da mesma
-    # pessoa, mas com 1 video por letra nao ha outro jeito. O teste abaixo
-    # serve de SANITY CHECK apenas; a metrica real do alfabeto e na camera.
-    print("\n[2/3] Treino/teste 80/20 (sanity check)...")
-    rng = np.random.default_rng(42)
-    idx = rng.permutation(len(X))
-    cut = int(len(X) * 0.8)
-    tr, te = idx[:cut], idx[cut:]
+    if PALAVRAS_DIR.exists():
+        videos = sorted(v for v in PALAVRAS_DIR.glob("*.mp4")
+                        if len(v.stem) == 1 and v.stem.isalpha())
+        print(f"  palavras2/: {len(videos)} videos de letra")
+        for v in videos:
+            for pose in extract_static_poses(v):
+                X.append(pose); y.append(v.stem.upper()); groups.append("palavras2")
+    else:
+        print("  palavras2/: nao encontrada (ok, usando so a coleta)")
 
-    scaler = StandardScaler()
-    Xtr = scaler.fit_transform(X[tr])
-    Xte = scaler.transform(X[te])
+    if not X:
+        raise SystemExit("Nenhum dado. Rode antes:  python coletar_alfabeto.py --pessoa 1")
 
-    print("\n[3/3] Treinando Random Forest...")
-    model = RandomForestClassifier(
-        n_estimators=200, max_depth=None, min_samples_leaf=2,
-        n_jobs=-1, random_state=42,
-    )
-    model.fit(Xtr, y[tr])
+    X = np.array(X); y = np.array(y); groups = np.array(groups)
+    print(f"\n  Total: {len(X)} poses, {len(np.unique(y))} letras, "
+          f"{len(np.unique(groups))} fonte(s)")
+    for letra in sorted(np.unique(y)):
+        print(f"    {letra}: {(y == letra).sum():4d}")
 
-    acc_tr = accuracy_score(y[tr], model.predict(Xtr))
-    acc_te = accuracy_score(y[te], model.predict(Xte))
-    print(f"\n  >>> ACURACIA TREINO: {acc_tr*100:.1f}% <<<")
-    print(f"  >>> ACURACIA TESTE: {acc_te*100:.1f}% <<<")
-    print("\n  Relatorio por letra (teste):")
-    print(classification_report(y[te], model.predict(Xte), zero_division=0))
+    # ---------------- avaliacao
+    print("\n[2/3] Avaliacao...")
+    fontes = sorted(np.unique(groups))
+    if len(fontes) >= 2:
+        # deixa uma pessoa/fonte inteira de fora: mede se reconhece maos novas
+        accs = []
+        for f in fontes:
+            te = groups == f
+            tr = ~te
+            if len(np.unique(y[tr])) < 2:
+                continue
+            Xtr = np.vstack([X[tr], espelhar(X[tr])]); ytr = np.concatenate([y[tr], y[tr]])
+            sc = StandardScaler().fit(Xtr)
+            m = novo_modelo().fit(sc.transform(Xtr), ytr)
+            validas = np.isin(y[te], np.unique(ytr))
+            acc = accuracy_score(y[te][validas], m.predict(sc.transform(X[te][validas])))
+            accs.append(acc)
+            print(f"    testando em {f:14s} (treino sem ele): {acc*100:5.1f}%")
+        if accs:
+            print(f"  >>> MEDIA por pessoa/fonte: {np.mean(accs)*100:.1f}% <<<")
+    else:
+        rng = np.random.default_rng(42)
+        idx = rng.permutation(len(X)); cut = int(len(X) * 0.8)
+        tr, te = idx[:cut], idx[cut:]
+        Xtr = np.vstack([X[tr], espelhar(X[tr])]); ytr = np.concatenate([y[tr], y[tr]])
+        sc = StandardScaler().fit(Xtr)
+        m = novo_modelo().fit(sc.transform(Xtr), ytr)
+        acc = accuracy_score(y[te], m.predict(sc.transform(X[te])))
+        print(f"  So uma fonte de dados: teste 80/20 (otimista) = {acc*100:.1f}%")
+        print("  Para medir com maos novas, colete com mais de uma pessoa (--pessoa 2, 3...).")
 
-    # retreina com TUDO pro modelo final (padrao quando o teste e so sanity)
-    model.fit(scaler.fit_transform(X), y)
-
+    # ---------------- modelo final com tudo (+ espelhado)
+    print("\n[3/3] Treinando modelo final...")
+    Xall = np.vstack([X, espelhar(X)]); yall = np.concatenate([y, y])
+    scaler = StandardScaler().fit(Xall)
+    model = novo_modelo().fit(scaler.transform(Xall), yall)
     with open(OUTPUT_MODEL, "wb") as f:
-        pickle.dump({
-            "model": model,
-            "scaler": scaler,
-            "letters": sorted(np.unique(y).tolist()),
-        }, f)
-    print(f"Modelo salvo em: {OUTPUT_MODEL}")
+        pickle.dump({"model": model, "scaler": scaler,
+                     "letters": sorted(np.unique(y).tolist())}, f)
+    print(f"Modelo salvo em: {OUTPUT_MODEL}  ({len(np.unique(y))} letras)")
 
 
 if __name__ == "__main__":

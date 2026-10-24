@@ -122,7 +122,8 @@ while True:
     # ------------------------------------------------------- ALFABETO
     if mode == "ALFABETO":
         if lm is not None and len(lm) == FEAT_DIM:
-            letra, conf = letters.predict(lm)
+            top_letras = letters.predict_top(lm, 3)
+            letra, conf = top_letras[0]
             if conf >= LETTER_CONF and letra == stable:
                 stable_count += 1
             else:
@@ -131,9 +132,15 @@ while True:
                     (not letra_atual or letra_atual[-1] != stable or mao_saiu):
                 letra_atual.append(stable)
                 mao_saiu = False
-            if stable_count >= 2 and conf >= LETTER_CONF:
-                cv2.putText(frame, f"{stable} ({conf*100:.0f}%)", (20, 140),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            # palpite sempre visivel: verde = aceito, cinza = confianca baixa
+            if conf >= LETTER_CONF:
+                cv2.putText(frame, f"{letra} ({conf*100:.0f}%)", (20, 140),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+            else:
+                cv2.putText(frame, f"{letra}? ({conf*100:.0f}%)", (20, 140),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (170, 170, 170), 3)
+            cv2.putText(frame, "  ".join(f"{l} {c*100:.0f}%" for l, c in top_letras),
+                        (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
         else:
             stable, stable_count = "", 0
             mao_saiu = True

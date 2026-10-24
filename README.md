@@ -36,6 +36,18 @@ python train_rotulado.py
 Não precisa descompactar: o script lê os vídeos de dentro dos ZIPs. Pode
 interromper e rodar de novo; o que já foi processado é pulado.
 
+### Alfabeto com as mãos do grupo
+
+O modelo de alfabeto original foi treinado com um único vídeo por letra e
+reconhece mal outras mãos. Para treinar com o grupo (≈5 min por pessoa):
+
+```bash
+python coletar_alfabeto.py --pessoa 1     # cada pessoa com seu número
+python train_alfabeto.py                  # usa coleta_alfabeto/ (+ palavras2/, se existir)
+```
+
+Com 2 ou mais pessoas, o treino mostra a acurácia testando em quem ficou fora.
+
 ### Coletar palavras pela webcam (dataset próprio, sem MINDS)
 
 ```bash
