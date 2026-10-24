@@ -183,10 +183,14 @@ def accept_word(top: list[tuple[str, float]],
 
 
 def abrir_camera(largura: int = 1280, altura: int = 720):
-    """Abre a webcam testando indices e backends ate conseguir LER uma imagem.
+    """Abre a webcam testando indices e backends ate conseguir uma IMAGEM de verdade.
 
-    No Windows o backend padrao (MSMF) as vezes abre a camera mas falha ao
-    ler ("can't grab frame", erro -1072875772); o DirectShow costuma funcionar.
+    - No Windows o backend padrao (MSMF) as vezes abre mas nao le ("can't grab
+      frame", erro -1072875772 = camera em uso por outro programa); o DirectShow
+      costuma funcionar.
+    - Cameras virtuais (NVIDIA Broadcast, OBS, Snap Camera...) podem abrir e
+      entregar so imagem PRETA quando o programa delas nao esta transmitindo:
+      essas sao puladas e so usadas como ultimo recurso.
     Defina LIBRES_CAMERA=N para forcar o indice da camera.
     """
     import os
@@ -199,24 +203,54 @@ def abrir_camera(largura: int = 1280, altura: int = 720):
     else:
         backends = [(cv2.CAP_ANY, "padrao")]
     forcado = os.environ.get("LIBRES_CAMERA")
-    indices = [int(forcado)] if forcado is not None else [0, 1, 2]
+    indices = [int(forcado)] if forcado is not None else [0, 1, 2, 3]
 
+    def tentar(idx, backend):
+        cap = cv2.VideoCapture(idx, backend)
+        if not cap.isOpened():
+            cap.release()
+            return None, "nao abriu"
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
+        leu = False
+        t0 = time.time()
+        while time.time() - t0 < 2.5:          # tempo para a exposicao automatica
+            ok, frame = cap.read()
+            if ok and frame is not None and frame.size:
+                leu = True
+                if float(frame.mean()) > 8.0:  # tem imagem de verdade
+                    return cap, "ok"
+            else:
+                time.sleep(0.03)
+        cap.release()
+        return None, ("so imagem preta" if leu else "nao entregou imagem")
+
+    reserva = None
+    relatorio = []
     for idx in indices:
         for backend, nome in backends:
-            cap = cv2.VideoCapture(idx, backend)
-            if not cap.isOpened():
-                cap.release()
-                continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
-            for _ in range(20):
-                ok, frame = cap.read()
-                if ok and frame is not None and frame.size:
-                    h, w = frame.shape[:2]
-                    print(f"Camera {idx} aberta via {nome} ({w}x{h})")
-                    return cap
-                time.sleep(0.05)
-            cap.release()
+            cap, motivo = tentar(idx, backend)
+            if cap is not None:
+                h, w = cap.read()[1].shape[:2]
+                print(f"Camera {idx} aberta via {nome} ({w}x{h})")
+                return cap
+            relatorio.append(f"  camera {idx} via {nome}: {motivo}")
+            if motivo == "so imagem preta" and reserva is None:
+                reserva = (idx, backend, nome)
+            if motivo != "nao abriu":
+                break                          # indice existe; nao repete backends
+
+    print("Nenhuma camera entregou imagem:")
+    print("\n".join(relatorio))
+    print("Dicas: feche programas que usam a webcam (Teams, Discord, navegador, OBS,\n"
+          "NVIDIA Broadcast) ou abra o NVIDIA Broadcast com a webcam como fonte.")
+    if reserva is not None:
+        idx, backend, nome = reserva
+        print(f"Abrindo mesmo assim a camera {idx} ({nome}), que esta mandando imagem preta.")
+        cap = cv2.VideoCapture(idx, backend)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
+        return cap
     return None
 
 
