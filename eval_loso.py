@@ -38,6 +38,8 @@ def extract_signer(group: str) -> str:
 def collect_with_signers():
     """Igual collect_data do treino, mas retorna signer_id em vez de grupo."""
     X_raw, y_labels, groups = tr.collect_data()
+    X_raw, y_labels, groups = tr.filtrar_vocabulario(X_raw, y_labels, groups,
+                                                     tr.ler_palavras_cli())
 
     # Mesmo filtro do treino: descarta classes com poucas amostras
     counts = Counter(y_labels.tolist())
@@ -66,7 +68,7 @@ def precompute_features(X_raw):
     return X_feat, X_aug
 
 
-def train_one_fold(X_feat, X_aug, y_enc, tr_idx, te_idx) -> tuple[float, float]:
+def train_one_fold(X_feat, X_aug, y_enc, tr_idx, te_idx, retornar_pred: bool = False):
     X_train = np.concatenate([X_feat[tr_idx], X_aug[tr_idx].reshape(-1, X_feat.shape[1])])
     y_train = np.concatenate([y_enc[tr_idx], np.repeat(y_enc[tr_idx], tr.AUG_MULTIPLIER)])
     X_test = X_feat[te_idx]
@@ -85,6 +87,8 @@ def train_one_fold(X_feat, X_aug, y_enc, tr_idx, te_idx) -> tuple[float, float]:
     model.fit(X_train_s, y_train, verbose=False)
 
     y_pred = model.predict(X_test_s)
+    if retornar_pred:
+        return accuracy_score(y_test, y_pred), balanced_accuracy_score(y_test, y_pred), y_pred
     return accuracy_score(y_test, y_pred), balanced_accuracy_score(y_test, y_pred)
 
 
@@ -109,6 +113,7 @@ def main():
           f" real={X_feat.shape}, aug={X_aug.shape}")
 
     accs, baccs = [], []
+    reais, previstos = [], []
 
     for fold, sid in enumerate(signer_ids, 1):
         te_mask = signers == sid
@@ -125,7 +130,8 @@ def main():
             continue
 
         tf = time.time()
-        acc, bacc = train_one_fold(X_feat, X_aug, y_enc, tr_idx, te_idx)
+        acc, bacc, pred = train_one_fold(X_feat, X_aug, y_enc, tr_idx, te_idx, True)
+        reais.extend(y_enc[te_idx]); previstos.extend(pred)
         accs.append(acc)
         baccs.append(bacc)
         print(f"  [{fold:2d}/{len(signer_ids)}] {sid}: "
@@ -137,6 +143,23 @@ def main():
           f"bal_acc={np.mean(baccs)*100:.1f}% <<<")
     print(f"    (min={min(accs)*100:.1f}%  max={max(accs)*100:.1f}%)")
     print("=" * 60)
+
+    # acerto por palavra (somando todas as rodadas) e com quem mais confunde
+    reais, previstos = np.array(reais), np.array(previstos)
+    print("\nAcerto por palavra (pessoa fora do treino):")
+    linhas = []
+    for c in np.unique(reais):
+        m = reais == c
+        acc_c = float(np.mean(previstos[m] == c))
+        erros = previstos[m][previstos[m] != c]
+        conf = ""
+        if len(erros):
+            v, n = np.unique(erros, return_counts=True)
+            conf = f"  (confunde com {le.inverse_transform([v[n.argmax()]])[0]})"
+        linhas.append((acc_c, le.inverse_transform([c])[0], conf))
+    for acc_c, nome, conf in sorted(linhas, reverse=True):
+        print(f"  {nome:12s} {acc_c*100:5.1f}%{conf}")
+    return sorted(linhas, reverse=True)
 
 
 if __name__ == '__main__':

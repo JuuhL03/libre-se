@@ -150,7 +150,8 @@ def preparar_treino(X: np.ndarray, y: np.ndarray, rng: np.random.Generator):
 
 
 def novo_modelo():
-    return RandomForestClassifier(n_estimators=300, max_depth=None, min_samples_leaf=2,
+    # 200 arvores / folhas com >= 3 amostras: mesmo desempenho, arquivo bem menor
+    return RandomForestClassifier(n_estimators=200, max_depth=None, min_samples_leaf=3,
                                   n_jobs=-1, random_state=42)
 
 
@@ -199,10 +200,15 @@ def main() -> None:
             sc = StandardScaler().fit(Xtr)
             m = novo_modelo().fit(sc.transform(Xtr), ytr)
             validas = np.isin(y[te], np.unique(ytr))
-            acc = accuracy_score(y[te][validas],
-                                 m.predict(sc.transform(alphabet_features(X[te][validas]))))
+            yt = y[te][validas]
+            pred = m.predict(sc.transform(alphabet_features(X[te][validas])))
+            acc = accuracy_score(yt, pred)
             accs.append(acc)
             print(f"    testando em {f:14s} (treino sem ele): {acc*100:5.1f}%")
+            por_letra = sorted((float(np.mean(pred[yt == l] == l)), l) for l in np.unique(yt))
+            fracas = [f"{l} {a*100:.0f}%" for a, l in por_letra if a < 0.8][:6]
+            if fracas:
+                print(f"        letras mais fracas: {', '.join(fracas)}")
         if accs:
             print(f"  >>> MEDIA por pessoa/fonte: {np.mean(accs)*100:.1f}% <<<")
     else:

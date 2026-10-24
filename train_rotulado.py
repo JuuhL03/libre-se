@@ -368,8 +368,33 @@ def grouped_split(indices: np.ndarray, y_enc: np.ndarray, groups: np.ndarray,
     return train_idx, test_idx
 
 
+def filtrar_vocabulario(X_raw, y_raw_labels, groups, palavras: str | None):
+    """Mantem so as palavras pedidas (--palavras a,b,c). Vocabulario menor =
+    menos confusao entre sinais parecidos."""
+    if not palavras:
+        return X_raw, y_raw_labels, groups
+    alvo = [normalize_label(p) for p in palavras.split(",") if p.strip()]
+    faltando = [p for p in alvo if p not in set(y_raw_labels.tolist())]
+    if faltando:
+        print(f"\n  ATENCAO: sem dados para: {', '.join(faltando)}")
+    keep = np.isin(y_raw_labels, alvo)
+    print(f"\n  Vocabulario restrito a {len(set(alvo) - set(faltando))} palavras: "
+          f"{', '.join(sorted(set(alvo) - set(faltando)))}")
+    return X_raw[keep], y_raw_labels[keep], groups[keep]
+
+
+def ler_palavras_cli() -> str | None:
+    import argparse
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--palavras", default=None,
+                    help="lista separada por virgula para restringir o vocabulario")
+    return ap.parse_known_args()[0].palavras
+
+
 def main() -> None:
     X_raw, y_raw_labels, groups = collect_data()
+    X_raw, y_raw_labels, groups = filtrar_vocabulario(X_raw, y_raw_labels, groups,
+                                                      ler_palavras_cli())
 
     if len(X_raw) == 0:
         print("ERRO: Nenhum dado!")

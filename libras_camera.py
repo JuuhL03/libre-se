@@ -29,7 +29,7 @@ import numpy as np
 
 from libres_features import FEAT_DIM
 from libres_realtime import (LeitorCamera, LetterRecognizer, SignSegmenter,
-                             WordRecognizer, abrir_camera, accept_word)
+                             Soletrador, WordRecognizer, abrir_camera, accept_word)
 
 PROJECT_DIR = Path(__file__).parent
 WORD_MODEL = PROJECT_DIR / "modelo_rotulado_xgb.pkl"
@@ -38,8 +38,6 @@ HAND_MODEL = PROJECT_DIR / "hand_landmarker.task"
 if not HAND_MODEL.exists():
     HAND_MODEL = Path.home() / "hand_landmarker.task"
 
-LETTER_CONF = 0.55
-LETTER_STABLE_FRAMES = 8
 
 # ---------------------------------------------------------------- modelos
 letters = words = None
@@ -82,8 +80,7 @@ leitor = LeitorCamera(cap)
 segmenter = SignSegmenter()
 texto: list[str] = []          # itens ja reconhecidos (letras e palavras)
 letra_atual: list[str] = []    # letras sendo soletradas
-stable, stable_count = "", 0
-mao_saiu = True     # repetir a mesma letra exige tirar a mao do quadro
+soletrador = Soletrador(letters) if letters is not None else None
 ultimo_top: list[tuple[str, float]] = []
 ultimo_ok: str | None = None
 t_prev = time.time()
@@ -121,29 +118,20 @@ while True:
 
     # ------------------------------------------------------- ALFABETO
     if mode == "ALFABETO":
-        if lm is not None and len(lm) == FEAT_DIM:
-            top_letras = letters.predict_top(lm, 3)
-            letra, conf = top_letras[0]
-            if conf >= LETTER_CONF and letra == stable:
-                stable_count += 1
-            else:
-                stable, stable_count = letra, 1
-            if stable_count == LETTER_STABLE_FRAMES and \
-                    (not letra_atual or letra_atual[-1] != stable or mao_saiu):
-                letra_atual.append(stable)
-                mao_saiu = False
+        info = soletrador.update(lm if lm is not None and len(lm) == FEAT_DIM else None)
+        if info["acao"] == "troca" and letra_atual:
+            letra_atual[-1] = info["letra"]
+        elif info["acao"] == "add":
+            letra_atual.append(info["letra"])
+        if info["letra"]:
             # palpite sempre visivel: verde = aceito, cinza = confianca baixa
-            if conf >= LETTER_CONF:
-                cv2.putText(frame, f"{letra} ({conf*100:.0f}%)", (20, 140),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-            else:
-                cv2.putText(frame, f"{letra}? ({conf*100:.0f}%)", (20, 140),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (170, 170, 170), 3)
-            cv2.putText(frame, "  ".join(f"{l} {c*100:.0f}%" for l, c in top_letras),
+            cor = (0, 255, 0) if info["aceita"] else (170, 170, 170)
+            marca = "" if info["aceita"] else "?"
+            mov = "  (movimento)" if info["movendo"] else ""
+            cv2.putText(frame, f"{info['letra']}{marca} ({info['conf']*100:.0f}%){mov}", (20, 140),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, cor, 3)
+            cv2.putText(frame, "  ".join(f"{l} {c*100:.0f}%" for l, c in info["top"]),
                         (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-        else:
-            stable, stable_count = "", 0
-            mao_saiu = True
 
     # ------------------------------------------------------- PALAVRAS
     else:
@@ -189,7 +177,8 @@ while True:
             mode = alvo
             fechar_soletracao()
             segmenter.reset()
-            stable, stable_count = "", 0
+            if soletrador is not None:
+                soletrador.reset()
             print(f"  modo: {mode}")
     elif key == ord(" "):
         texto.clear()

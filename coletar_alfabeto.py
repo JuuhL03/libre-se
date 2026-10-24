@@ -11,7 +11,8 @@ Uso:
 Como funciona: a tela mostra a letra. Faca a letra com a mao parada e aperte
 ESPACO. Depois de uma contagem curta, grava ~1,5 s (45 quadros) e passa para o
 proximo take/letra sozinho. Mexa um pouco a mao entre os takes (distancia,
-angulo), isso ajuda o modelo a generalizar.
+angulo), isso ajuda o modelo a generalizar. J e Z tem movimento: durante a
+gravacao, repita o movimento da letra sem parar (~2 s).
 
 Teclas:  ESPACO = gravar  |  N / P = proxima / anterior  |  D = apaga o ultimo take
          Q = sair
@@ -36,15 +37,17 @@ HAND_MODEL = PROJECT_DIR / "hand_landmarker.task"
 if not HAND_MODEL.exists():
     HAND_MODEL = Path.home() / "hand_landmarker.task"
 
-LETRAS_PADRAO = list("ABCDEFGHIJKLMNOPQRSTUVWXY")
+LETRAS_PADRAO = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 QUADROS_POR_TAKE = 45
+QUADROS_DINAMICA = 60          # J e Z: grava o movimento inteiro
+DINAMICAS = {"J", "Z"}
 CONTAGEM_S = 1.0
 
 ap = argparse.ArgumentParser(description="Coleta do alfabeto em Libras")
 ap.add_argument("--pessoa", type=int, required=True, help="numero fixo de quem esta sinalizando")
 ap.add_argument("--letras", type=str, default="".join(LETRAS_PADRAO),
-                help="letras a coletar, ex.: A,B,C (padrao: A a Y)")
-ap.add_argument("--takes", type=int, default=2, help="takes por letra (padrao 2)")
+                help="letras a coletar, ex.: A,B,C (padrao: A a Z)")
+ap.add_argument("--takes", type=int, default=3, help="takes por letra (padrao 3)")
 args = ap.parse_args()
 
 letras = [c.strip().upper() for c in args.letras.replace(",", "") if c.strip()]
@@ -111,7 +114,7 @@ while True:
     if estado == "gravando":
         if lm is not None and len(lm) == FEAT_DIM:
             buffer.append(lm)
-        if len(buffer) >= QUADROS_POR_TAKE:
+        if len(buffer) >= (QUADROS_DINAMICA if letra in DINAMICAS else QUADROS_POR_TAKE):
             ultimo = proximo_arquivo(letra)
             np.save(ultimo, np.array(buffer))
             n = len(takes(letra))
@@ -132,8 +135,12 @@ while True:
         cv2.putText(frame, "prepare...", (20, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 3)
     elif estado == "gravando":
         cv2.circle(frame, (frame.shape[1] - 40, 40), 14, (0, 0, 255), -1)
-        cv2.putText(frame, f"gravando {len(buffer)}/{QUADROS_POR_TAKE}", (20, 220),
+        meta = QUADROS_DINAMICA if letras[idx] in DINAMICAS else QUADROS_POR_TAKE
+        cv2.putText(frame, f"gravando {len(buffer)}/{meta}", (20, 220),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+        if letras[idx] in DINAMICAS:
+            cv2.putText(frame, "repita o MOVIMENTO da letra sem parar", (20, 260),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     elif lm is None:
         cv2.putText(frame, "mao nao detectada", (20, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
     else:

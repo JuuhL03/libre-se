@@ -4,6 +4,29 @@ Reconhecimento de sinais em **Libras** (Língua Brasileira de Sinais) usando vis
 
 Extrai landmarks das mãos com **MediaPipe Hands**, calcula features temporais (estatísticas, ângulos dos dedos, distâncias relativas) e classifica com **XGBoost**.
 
+## 🎯 Roteiro para a demonstração
+
+Nenhum modelo acerta 100% com qualquer pessoa. Para acertar praticamente sempre
+com quem vai **apresentar**, o modelo é calibrado com exemplos dessa pessoa
+(~15 min no total):
+
+**Alfabeto (A–Z, inclusive J e Z com movimento)**
+```bash
+python coletar_alfabeto.py --pessoa 1      # ~6 min; J e Z: repetir o movimento
+python train_alfabeto.py                   # junta com os datasets públicos
+```
+
+**Palavras**
+```bash
+python analisar_palavras.py                # escolhe as melhores palavras (1 mão)
+python coletar_palavras.py --sinalizador 50 --palavras <lista> --takes 10
+python train_rotulado.py --palavras <lista>
+python eval_loso.py --palavras <lista>     # número para o TCC
+```
+
+Depois: `python libras_camera.py`. Na apresentação: boa iluminação, mão inteira
+no quadro, a outra mão abaixada nas palavras de uma mão.
+
 ## ⚡ v2 — palavras funcionando (outubro/2026)
 
 O reconhecimento de **palavras** não funcionava porque a normalização zerava
