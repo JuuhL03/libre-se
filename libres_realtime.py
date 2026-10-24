@@ -66,7 +66,12 @@ class _VelocidadeSuave:
 
     def update(self, pontos: np.ndarray, t: float) -> float:
         self.hist.append((t, np.asarray(pontos, dtype=np.float64).reshape(-1, 2)))
-        self.hist = [(ti, p) for ti, p in self.hist if t - ti <= self.janela]
+        dentro = [(ti, p) for ti, p in self.hist if t - ti <= self.janela]
+        if len(dentro) < 4:
+            # camera lenta (ex.: 10 quadros/s): a janela teria 2-3 quadros e a
+            # velocidade ficaria sempre zero; usa os 4 ultimos (ate 0,6 s)
+            dentro = [(ti, p) for ti, p in self.hist[-4:] if t - ti <= max(self.janela, 0.6)]
+        self.hist = dentro
         n = len(self.hist)
         if n < 4 or self.hist[-1][0] - self.hist[0][0] < self.min_span:
             return 0.0

@@ -68,6 +68,8 @@ Teste sem câmera (`python teste_soletrador.py --sementes 0,11,22,33 --tremor 1,
 OSSO, JUIZ, J, Z, X, H, Y...), transições suaves entre letras, movimento simulado
 e tremor de 1 a 4 px, a 30 e a 15 fps. Resultado: **574/576 (99,7%)**; com tremor
 de até 3 px, 432/432. As 2 falhas foram com 4 px (SOL → OL, BOLA → BOA).
+A 10 fps, gestos rápidos (H curto, X sacudido) deixam de ser reconhecidos:
+para as letras com movimento, use a câmera a 15 fps ou mais (o painel mostra o fps).
 
 **Alguma letra ou palavra falhou?** Logo depois de tentar, aperte `S`. O
 trecho salvo pode ser analisado sem câmera:
