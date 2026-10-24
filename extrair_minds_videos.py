@@ -43,6 +43,41 @@ SINAIS = ["acontecer", "aluno", "amarelo", "america", "aproveitar", "bala", "ban
 MIN_HAND_FRAMES = 10          # mesmo filtro do integrate_minds.py
 LARGURA_PROCESSAMENTO = 640   # reduz o Full HD antes do MediaPipe (bem mais rapido)
 VIDEO_EXT = (".mp4", ".avi", ".mov", ".mkv")
+WRAP = 1 << 32                # 4 GB: limite dos ZIPs sem ZIP64 (gerados no macOS)
+
+
+def eh_lixo_mac(nome: str) -> bool:
+    """__MACOSX/ e arquivos '._xxx' sao metadados do macOS, nao videos."""
+    partes = nome.replace("\\", "/").split("/")
+    return "__MACOSX" in partes or partes[-1].startswith("._")
+
+
+def abrir_membro(z: zipfile.ZipFile, caminho_zip: str, membro: str):
+    """Abre um arquivo de dentro do ZIP corrigindo a posicao quando o ZIP passa
+    de 4 GB sem ZIP64 (o macOS grava as posicoes 'dando a volta' em 4 GB e o
+    Python soma 4 GB a mais em todas). Procura a posicao certa testando
+    multiplos de 4 GB e conferindo a assinatura e o nome do arquivo."""
+    info = z.getinfo(membro)
+    try:
+        nome = info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437")
+    except UnicodeEncodeError:
+        nome = info.orig_filename.encode("utf-8")
+    tamanho = os.path.getsize(caminho_zip)
+    with open(caminho_zip, "rb") as f:
+        for k in (0, -1, 1, -2, 2, -3, 3):
+            pos = info.header_offset + k * WRAP
+            if not 0 <= pos <= tamanho - 30:
+                continue
+            f.seek(pos)
+            cab = f.read(30)
+            if cab[:4] == b"PK\x03\x04" and f.read(int.from_bytes(cab[26:28], "little")) == nome:
+                info.header_offset = pos
+                # o limite anti "zip bomb" do Python e calculado com as posicoes
+                # erradas dos vizinhos; a posicao ja foi conferida acima
+                if hasattr(info, "_end_offset"):
+                    info._end_offset = None
+                break
+    return z.open(info)
 
 
 def sem_acento(s: str) -> str:
@@ -78,6 +113,10 @@ _landmarker = None
 
 def _init_worker():
     global _landmarker
+    os.environ.setdefault("GLOG_minloglevel", "2")
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+    os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
     import mediapipe as mp
     opts = mp.tasks.vision.HandLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_buffer=HAND_MODEL.read_bytes()),
@@ -118,7 +157,7 @@ def processar(tarefa: tuple[str, str | None, str, str]) -> tuple[str, str, int]:
         if membro is None:
             video = origem
         else:
-            with zipfile.ZipFile(origem) as z, z.open(membro) as src:
+            with zipfile.ZipFile(origem) as z, abrir_membro(z, origem, membro) as src:
                 fd, tmp = tempfile.mkstemp(suffix=Path(membro).suffix)
                 with os.fdopen(fd, "wb") as dst:
                     while chunk := src.read(1 << 20):
@@ -153,9 +192,9 @@ def listar_tarefas(pasta: Path) -> tuple[list, list]:
         if arq.suffix.lower() == ".zip":
             with zipfile.ZipFile(arq) as z:
                 for membro in z.namelist():
-                    if membro.lower().endswith(VIDEO_EXT):
+                    if membro.lower().endswith(VIDEO_EXT) and not eh_lixo_mac(membro):
                         adicionar(arq, membro, f"{arq.stem}/{membro}")
-        elif arq.suffix.lower() in VIDEO_EXT:
+        elif arq.suffix.lower() in VIDEO_EXT and not eh_lixo_mac(str(arq)):
             adicionar(arq, None, str(arq.relative_to(pasta)))
     return tarefas, ignorados
 
@@ -190,6 +229,7 @@ def main() -> None:
     print(f"Processando com {args.processos} processo(s)...\n")
     t0 = time.time()
     ok = falhas = 0
+    erros_zip: dict[str, int] = {}
     with ProcessPoolExecutor(max_workers=args.processos, initializer=_init_worker) as ex:
         futs = [ex.submit(processar, t) for t in pendentes]
         for i, fut in enumerate(as_completed(futs), 1):
@@ -199,6 +239,10 @@ def main() -> None:
             else:
                 falhas += 1
                 print(f"   [{status}] {Path(saida).name} ({n} frames com mao)")
+                if status.startswith("erro"):
+                    m = re.search(r"Sinalizador(\d+)", saida)
+                    chave = f"Sinalizador{m.group(1)}" if m else "?"
+                    erros_zip[chave] = erros_zip.get(chave, 0) + 1
             if i % 20 == 0 or i == len(pendentes):
                 gasto = time.time() - t0
                 resta = gasto / i * (len(pendentes) - i)
@@ -206,6 +250,11 @@ def main() -> None:
                       f"faltam ~{resta/60:.0f} min", flush=True)
 
     print(f"\nPronto: {ok} salvos, {falhas} descartados/erros.")
+    if erros_zip:
+        print("ATENCAO - erros de leitura (arquivo possivelmente corrompido/incompleto):")
+        for k, v in sorted(erros_zip.items()):
+            print(f"   {k}: {v} videos. Baixe esse ZIP de novo ou extraia-o com o 7-Zip")
+            print(f"   e coloque a pasta extraida dentro de minds_videos/.")
     print("Por palavra:")
     for s in SINAIS:
         n = len(list((OUTPUT_DIR / s).glob("minds_*.npy"))) if (OUTPUT_DIR / s).exists() else 0
