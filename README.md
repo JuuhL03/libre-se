@@ -10,9 +10,11 @@ Nenhum modelo acerta 100% com qualquer pessoa. Para acertar praticamente sempre
 com quem vai **apresentar**, o modelo é calibrado com exemplos dessa pessoa
 (~15 min no total):
 
-**Alfabeto (A–Z, inclusive J e Z com movimento)**
+**Alfabeto (A–Z)** — já vem treinado com datasets públicos de imagens
+(`modelo_alfabeto.pkl`, sem precisar gravar ninguém). Calibrar com quem vai
+apresentar é opcional:
 ```bash
-python coletar_alfabeto.py --pessoa 1      # ~6 min; J e Z: repetir o movimento
+python coletar_alfabeto.py --pessoa 1      # opcional, ~6 min
 python train_alfabeto.py                   # junta com os datasets públicos
 ```
 
@@ -26,6 +28,54 @@ python eval_loso.py --palavras <lista>     # número para o TCC
 
 Depois: `python libras_camera.py`. Na apresentação: boa iluminação, mão inteira
 no quadro, a outra mão abaixada nas palavras de uma mão.
+
+## 🖥️ Usando o app (`libras_camera.py`)
+
+A janela tem a câmera (só com os pontos da mão) e, ao lado, um **painel escuro**
+com o texto reconhecido, a letra/palavra do momento, as 3 opções mais
+prováveis, os sinais que o modelo conhece e o histórico. O painel não depende
+da luz da sala, e tudo o que entra no texto também vai para `saida_libras.txt`.
+
+| Tecla | Ação |
+|---|---|
+| `M` | alterna ALFABETO ↔ PALAVRAS |
+| `ESPAÇO` | limpa o texto |
+| `BACKSPACE` | apaga o último item |
+| `S` | salva os últimos 6 s de pontos da mão em `debug/` (sem imagem) |
+| `Q` | sai |
+
+**Letras com movimento (H, J, K, X, Z):** faça o movimento e, no fim, pare a
+mão ou abaixe; a letra entra quando o movimento termina. Enquanto a mão se
+move, o painel mostra "movimento...".
+
+| Letra | Como o app reconhece |
+|---|---|
+| J | forma do I (só o mínimo) + movimento; o I que entrou antes vira J |
+| H | indicador e médio esticados (forma do U ou do V) + movimento para o lado |
+| Z | indicador esticado desenhando o Z (vai, desce na diagonal, vai) |
+| X | indicador esticado (apontando para o lado) + um movimento curto, sem descer |
+| K | pelo modelo, quando a mão se move com a forma do K |
+| Y | regra de geometria: polegar e mínimo esticados, demais dobrados |
+| U × R × V | regra de geometria: distância entre as pontas do indicador e do médio |
+
+Para repetir a mesma letra (OSSO), tire a mão do quadro entre as duas.
+
+Com a mão parada, o app usa a média dos últimos 0,2 s (probabilidades e
+pontos da mão): o tremor do MediaPipe deixa de trocar a letra quadro a quadro.
+
+Teste sem câmera (`python teste_soletrador.py --sementes 0,11,22,33 --tremor 1,2,3,4`):
+18 sequências montadas com poses reais dos datasets (UVA, RUA, BOLA, SOL, LIVRE,
+OSSO, JUIZ, J, Z, X, H, Y...), transições suaves entre letras, movimento simulado
+e tremor de 1 a 4 px, a 30 e a 15 fps. Resultado: **574/576 (99,7%)**; com tremor
+de até 3 px, 432/432. As 2 falhas foram com 4 px (SOL → OL, BOLA → BOA).
+
+**Alguma letra ou palavra falhou?** Logo depois de tentar, aperte `S`. O
+trecho salvo pode ser analisado sem câmera:
+
+```bash
+python reproduzir_trecho.py debug/trecho_AAAAMMDD_HHMMSS.npz            # resumo
+python reproduzir_trecho.py debug/trecho_AAAAMMDD_HHMMSS.npz --quadros  # quadro a quadro
+```
 
 ## ⚡ v2 — palavras funcionando (outubro/2026)
 
@@ -117,7 +167,9 @@ abaixe a mão.
 ```
 Libre-se/
 ├── train_rotulado.py          # Pipeline de treino (extração → aumento → XGBoost)
-├── test_camera_temporal.py    # Inferência em tempo real com webcam
+├── libras_camera.py          # App da câmera: alfabeto + palavras, com painel
+├── reproduzir_trecho.py      # Analisa trechos salvos com a tecla S
+├── test_camera_temporal.py    # Inferência em tempo real com webcam (antigo)
 ├── collect_signs.py           # Coleta de sinais via webcam (A-Z, 1-10)
 ├── auto_split_signs.py        # Divisão automática de vídeos YouTube por movimento
 ├── slice_signs.py             # Divisão manual de vídeos com timestamps

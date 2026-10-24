@@ -257,3 +257,101 @@ def mirror_raw(raw: np.ndarray) -> np.ndarray:
     out = np.asarray(raw, dtype=np.float64).reshape(-1, FEAT_DIM).copy()
     out[:, 0::N_COORDS] *= -1
     return out
+
+
+# --- GEOMETRIA DA MAO (regras para letras que os datasets nao cobrem bem) ----
+_DEDOS = {"indicador": (5, 6, 7, 8), "medio": (9, 10, 11, 12),
+          "anelar": (13, 14, 15, 16), "minimo": (17, 18, 19, 20)}
+
+
+def _ang(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+    v1, v2 = a - b, c - b
+    cosv = np.dot(v1, v2) / max(np.linalg.norm(v1) * np.linalg.norm(v2), 1e-9)
+    return float(np.degrees(np.arccos(np.clip(cosv, -1, 1))))
+
+
+def geometria_mao(raw: np.ndarray) -> dict:
+    """Estado de cada dedo a partir dos 21 pontos (qualquer escala/posicao).
+
+    Retorna angulos (graus; 180 = reto), 'esticado' por dedo, se indicador e
+    medio estao cruzados ou afastados, e se o indicador esta em gancho."""
+    r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+    r = r - r[0]
+    tam = max(float(np.linalg.norm(r[9])), 1e-9)
+    r = r / tam
+    g = {"angulos": {}, "esticado": {}}
+    for nome, (m, p, d, t) in _DEDOS.items():
+        a_pip, a_dip = _ang(r[m], r[p], r[d]), _ang(r[p], r[d], r[t])
+        g["angulos"][nome] = (a_pip, a_dip)
+        g["esticado"][nome] = a_pip > 140 and a_dip > 120 and \
+            np.linalg.norm(r[t]) > np.linalg.norm(r[p]) * 1.15
+    a_mcp, a_ip = _ang(r[1], r[2], r[3]), _ang(r[2], r[3], r[4])
+    g["angulos"]["polegar"] = (a_mcp, a_ip)
+    # polegar "para fora": reto e com a ponta longe da base do indicador
+    g["esticado"]["polegar"] = a_ip > 140 and np.linalg.norm(r[4] - r[5]) > 0.75
+    # indicador x medio, no plano da imagem, num referencial em que o punho -> base
+    # do medio aponta para cima (independe da inclinacao da mao e de espelhamento)
+    eixo = r[9, :2] / max(np.linalg.norm(r[9, :2]), 1e-9)
+    lado = np.array([-eixo[1], eixo[0]])
+    x = lambda i: float(np.dot(r[i, :2], lado))
+    g["cruzados"] = np.sign(x(5) - x(9)) != np.sign(x(8) - x(12)) and abs(x(8) - x(12)) > 0.05
+    v_i, v_m = r[8, :2] - r[5, :2], r[12, :2] - r[9, :2]
+    cosv = np.dot(v_i, v_m) / max(np.linalg.norm(v_i) * np.linalg.norm(v_m), 1e-9)
+    g["abertura"] = float(np.degrees(np.arccos(np.clip(cosv, -1, 1))))
+    g["dist_pontas"] = float(np.linalg.norm(r[8, :2] - r[12, :2]))
+    g["gancho"] = 60 < g["angulos"]["indicador"][0] < 140
+    return g
+
+
+def separacao_pontas(raw: np.ndarray) -> float:
+    """Posicao lateral da ponta do indicador em relacao a do medio, no
+    referencial da mao (punho -> base do medio = "para cima"), com o sinal
+    ajustado pelo lado das bases. Medido nos datasets (mediana):
+    R (cruzados) ~0 ou negativa | U (juntos) +0,12 a +0,30 | V (afastados) ~+0,58."""
+    r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+    r = r - r[0]
+    r = r / max(float(np.linalg.norm(r[9])), 1e-9)
+    eixo = r[9, :2] / max(float(np.linalg.norm(r[9, :2])), 1e-9)
+    lado = np.array([-eixo[1], eixo[0]])
+    x = lambda i: float(np.dot(r[i, :2], lado))
+    return (x(8) - x(12)) * (1.0 if x(5) - x(9) >= 0 else -1.0)
+
+
+def letra_urv(raw: np.ndarray) -> str | None:
+    """Desempata U / R / V pela separacao das pontas (None = zona de duvida)."""
+    s = separacao_pontas(raw)
+    if s < 0.04:
+        return "R"
+    if 0.07 <= s <= 0.32:
+        return "U"
+    if s >= 0.36:
+        return "V"
+    return None
+
+
+def eh_y(raw: np.ndarray) -> bool:
+    """Y: minimo reto, polegar para fora, indicador/medio/anelar bem dobrados.
+    Nos datasets: 100% de precisao, pega 92% dos Y (o modelo sozinho: 0%)."""
+    g = geometria_mao(raw)
+    a = g["angulos"]
+    dobrado = lambda d: a[d][0] < 110
+    return (a["minimo"][0] > 150 and a["minimo"][1] > 140 and g["esticado"]["polegar"]
+            and dobrado("indicador") and dobrado("medio") and dobrado("anelar"))
+
+
+def forma_mao(raw: np.ndarray) -> str | None:
+    """Configuracoes simples e bem definidas (None = deixa para o modelo):
+    'Y', 'I' (so o minimo), 'U'/'R'/'V'/'DOIS' (indicador + medio),
+    'INDICADOR' (so o indicador)."""
+    if eh_y(raw):
+        return "Y"
+    g = geometria_mao(raw)
+    e = g["esticado"]
+    i, m, a, mi = e["indicador"], e["medio"], e["anelar"], e["minimo"]
+    if mi and not (i or m or a) and not e["polegar"]:
+        return "I"
+    if i and m and not (a or mi):
+        return letra_urv(raw) or "DOIS"
+    if i and not (m or a or mi):
+        return "INDICADOR"
+    return None

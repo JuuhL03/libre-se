@@ -16,3 +16,5 @@ venv/
 *.rar
 minds_videos/
 minds/
+debug/
+saida_libras.txt

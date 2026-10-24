@@ -27,9 +27,57 @@ from typing import Optional
 import numpy as np
 
 from libres_features import (FEAT_DIM, FEATURE_VERSION, N_COORDS, N_LANDMARKS,
-                             alphabet_features, mirror_raw,
+                             alphabet_features, mirror_raw, eh_y, forma_mao, letra_urv,
                              compute_enhanced_features, normalize_landmarks,
                              normalize_sequence)
+
+
+class _TamanhoMao:
+    """Tamanho da mao (punho -> base do medio) suavizado: o valor de um quadro
+    so tambem treme, e dividir posicoes absolutas por ele cria movimento falso."""
+
+    def __init__(self, alfa: float = 0.15) -> None:
+        self.alfa, self.valor = alfa, None
+
+    def reset(self) -> None:
+        self.valor = None
+
+    def update(self, r: np.ndarray) -> float:
+        atual = max(float(np.linalg.norm(r[9, :2] - r[0, :2])), 1e-6)
+        self.valor = atual if self.valor is None else (1 - self.alfa) * self.valor + self.alfa * atual
+        return self.valor
+
+
+class _VelocidadeSuave:
+    """Velocidade (maos/s) pelo deslocamento LIQUIDO numa janela curta,
+    comparando a posicao media do inicio com a do fim da janela.
+
+    Somar o caminho quadro a quadro transforma o tremor do MediaPipe em
+    "movimento" (meio pixel de tremor ja dava >1 mao/s a 30 fps); a media
+    cancela o tremor e independe da taxa de quadros."""
+
+    def __init__(self, janela: float = 0.25, min_span: float = 0.0) -> None:
+        self.janela = janela
+        self.min_span = min_span     # historico minimo (s) antes de medir
+        self.hist: list[tuple[float, np.ndarray]] = []
+
+    def reset(self) -> None:
+        self.hist = []
+
+    def update(self, pontos: np.ndarray, t: float) -> float:
+        self.hist.append((t, np.asarray(pontos, dtype=np.float64).reshape(-1, 2)))
+        self.hist = [(ti, p) for ti, p in self.hist if t - ti <= self.janela]
+        n = len(self.hist)
+        if n < 4 or self.hist[-1][0] - self.hist[0][0] < self.min_span:
+            return 0.0
+        k = max(1, n // 3)
+        ini, fim = self.hist[:k], self.hist[-k:]
+        p0 = np.mean([p for _, p in ini], axis=0)
+        p1 = np.mean([p for _, p in fim], axis=0)
+        dt = np.mean([ti for ti, _ in fim]) - np.mean([ti for ti, _ in ini])
+        if dt <= 0:
+            return 0.0
+        return float(np.linalg.norm(p1 - p0, axis=1).max() / dt)
 
 
 class SignSegmenter:
@@ -76,6 +124,8 @@ class SignSegmenter:
         self._last: Optional[np.ndarray] = None
         self._t_last: Optional[float] = None
         self._t_mao: Optional[float] = None
+        self._vel = _VelocidadeSuave()
+        self._tam = _TamanhoMao()
 
     @staticmethod
     def _desloc(a: np.ndarray, b: np.ndarray) -> float:
@@ -114,19 +164,21 @@ class SignSegmenter:
             if self._t_mao is not None and t - self._t_mao >= self.gap_time:
                 self.waiting = False
                 self._last = None
+                self._t_last = None
                 self._t_mao = None
+                self._vel.reset()
+                self._tam.reset()
                 if self.buf:
                     return self._emit()
             return None
 
         lm = np.asarray(landmarks, dtype=np.float64).reshape(-1)
         self._t_mao = t
-        if self._last is not None and self._t_last is not None:
-            dt = min(max(t - self._t_last, 1 / 120), 0.5)
-            desloc = self._desloc(self._last, lm)
-            vel = desloc / dt
-        else:
-            desloc, vel = 0.0, 0.0
+        r = lm.reshape(N_LANDMARKS, N_COORDS)
+        tam = self._tam.update(r)
+        vel = self._vel.update(r[0, :2] / tam, t)
+        dt = min(max(t - self._t_last, 1 / 120), 0.5) if self._t_last is not None else 0.0
+        desloc = vel * dt
         self._last, self._t_last = lm, t
 
         if self.waiting:
@@ -163,32 +215,27 @@ class SignSegmenter:
 
 
 class MovimentoMao:
-    """Velocidade recente das pontas do indicador e do minimo (maos/s), media
-    numa janela curta. Usada para distinguir letras com movimento (J, Z)."""
+    """Velocidade das pontas do indicador e do minimo (maos/s), suavizada.
+    Usada para separar letras paradas das letras com movimento."""
 
-    def __init__(self, janela: float = 0.4) -> None:
-        self.janela = janela
-        self.hist: list[tuple[float, np.ndarray]] = []
+    def __init__(self, janela: float = 0.3) -> None:
+        # so mede depois de ~0,25 s de mao no quadro: com poucos quadros a
+        # media nao cancela o tremor e a mao "parada" parecia se mexer
+        self._vel = _VelocidadeSuave(janela, min_span=0.8 * janela)
+        self.tam = _TamanhoMao()
 
     def reset(self) -> None:
-        self.hist = []
+        self._vel.reset()
+        self.tam.reset()
 
     def update(self, landmarks: Optional[np.ndarray], t: Optional[float] = None) -> float:
         import time as _time
         t = _time.time() if t is None else float(t)
         if landmarks is None:
-            self.hist = []
+            self.reset()
             return 0.0
         r = np.asarray(landmarks, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
-        size = max(float(np.linalg.norm(r[9, :2] - r[0, :2])), 1e-6)
-        self.hist.append((t, r[[8, 20], :2] / size))
-        self.hist = [(ti, p) for ti, p in self.hist if t - ti <= self.janela]
-        if len(self.hist) < 3:
-            return 0.0
-        caminho = sum(float(np.linalg.norm(b[1] - a[1], axis=1).max())
-                      for a, b in zip(self.hist, self.hist[1:]))
-        dur = self.hist[-1][0] - self.hist[0][0]
-        return caminho / dur if dur > 0 else 0.0
+        return self._vel.update(r[[8, 20], :2] / self.tam.update(r), t)
 
 
 class WordRecognizer:
@@ -244,30 +291,104 @@ class LetterRecognizer:
         return self.predict_top(landmarks, 1)[0]
 
 
-LETRAS_DINAMICAS = {"J", "Z"}   # letras com movimento no alfabeto manual
+# Letras com movimento no alfabeto manual da Libras (H, J, K, X, Z).
+LETRAS_DINAMICAS = {"H", "J", "K", "X", "Z"}
+# letra parada que tem a mesma forma de mao do inicio de cada letra com movimento
+BASE_DINAMICA = {"J": {"I"}, "H": {"U", "V", "R"}, "Z": None, "X": None, "K": None}
+
+
+class _Segmento:
+    """Um trecho continuo de movimento da mao (candidato a H, J, K, X ou Z)."""
+
+    def __init__(self, t: float) -> None:
+        self.t0 = t
+        self.formas: list = []
+        self.estaticas: list = []
+        self.top2: list = []
+        self.ponta: list = []       # ponta do indicador em "maos" (referencial da imagem)
+
+    def add(self, t, forma, estatica, top, raw, tam: float) -> None:
+        r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+        self.formas.append(forma)
+        self.estaticas.append(estatica)
+        self.top2.append({l for l, _ in top[:2]})
+        self.ponta.append(r[8, :2] / tam)
+        self.t1 = t
+
+    def inversoes_x(self, minimo: float = 0.25) -> int:
+        """Quantas vezes a ponta do indicador muda de direcao na horizontal
+        (com histerese, para ignorar tremor). Z ~ 2 ou mais; X ~ 0 ou 1."""
+        xs = [p[0] for p in self.ponta]
+        n, ref, direcao = 0, xs[0] if xs else 0.0, 0
+        for x in xs[1:]:
+            d = x - ref
+            if direcao >= 0 and d < -minimo:
+                n += direcao > 0
+                direcao, ref = -1, x
+            elif direcao <= 0 and d > minimo:
+                n += direcao < 0
+                direcao, ref = 1, x
+            elif (direcao > 0 and x > ref) or (direcao < 0 and x < ref):
+                ref = x
+        return n
+
+    def predominio(self, fracao: float = 0.6):
+        validas = [f for f in self.formas if f is not None]
+        if not validas:
+            return None
+        from collections import Counter
+        forma, n = Counter("DOIS" if f in ("U", "R", "V", "DOIS") else f for f in validas).most_common(1)[0]
+        return forma if n >= fracao * len(self.formas) else None
+
+    def letra(self) -> Optional[str]:
+        dur = self.t1 - self.t0
+        if dur < 0.3 or len(self.formas) < 4:
+            return None
+        forma = self.predominio()
+        fim = [("DOIS" if f in ("U", "R", "V", "DOIS") else f) for f in self.formas[-max(2, len(self.formas) // 3):]]
+        mantida = forma is not None and fim.count(forma) >= len(fim) / 2   # a forma dura ate o fim
+        pts = np.array(self.ponta)
+        dx, dy = np.ptp(pts[:, 0]), np.ptp(pts[:, 1])
+        if mantida and forma == "I":
+            return "J"
+        if mantida and forma == "DOIS" and dx >= dy:
+            return "H"
+        if mantida and forma == "INDICADOR":
+            # Z: vai e volta na horizontal E desce (o traco diagonal); um X
+            # sacudido varias vezes tambem inverte a direcao, mas quase nao desce
+            return "Z" if self.inversoes_x() >= 2 and dy >= 0.3 * dx else "X"
+        if sum("K" in t for t in self.top2) >= 0.5 * len(self.top2):
+            return "K"
+        return None
 
 
 class Soletrador:
     """Decide, quadro a quadro, quando uma letra entra no texto.
 
-    - mao parada: vale a melhor letra ESTATICA (todas menos J e Z);
-    - mao em movimento: se J ou Z estiver entre os 2 palpites, vale ele
-      (o J tem a mesma forma de mao do I: o que o distingue e o movimento);
-    - a letra precisa ficar estavel por um tempo minimo (segundos);
+    - mao PARADA: letra estatica (modelo + regras de geometria para Y e para
+      desempatar U/R/V), sobre a media dos ultimos 0,2 s (probabilidades e
+      pontos da mao, contra o tremor); precisa ficar estavel ~0,3 s;
+    - mao EM MOVIMENTO: nada entra durante o gesto; quando o movimento termina,
+      ele e classificado como H, J, K, X ou Z pela forma da mao e pelo caminho
+      (J = forma de I; H = U/V com movimento lateral; Z = indicador em
+      zigue-zague que desce; X = indicador com movimento curto, sem descer;
+      K = indicado pelo modelo);
     - letra repetida (OSSO) exige tirar a mao do quadro entre as duas;
-    - se uma letra acabou de entrar e em seguida vem o movimento de J/Z sem a
-      mao sair, ela e trocada (o "I" que vira "J").
+    - se a letra parada que acabou de entrar era o comeco do gesto (o "I" do
+      "J"), ela e trocada pela letra com movimento.
     """
 
-    def __init__(self, rec: "LetterRecognizer", conf_min: float = 0.55, conf_din: float = 0.25,
-                 tempo_estavel: float = 0.3, tempo_din: float = 0.15,
-                 mov_limiar: float = 1.0, janela_troca: float = 1.0) -> None:
+    def __init__(self, rec: "LetterRecognizer", conf_min: float = 0.55,
+                 tempo_estavel: float = 0.3, mov_limiar: float = 1.5,
+                 fim_movimento: float = 0.25, janela_troca: float = 1.5,
+                 janela_prob: float = 0.2) -> None:
         self.rec = rec
-        self.conf_min, self.conf_din = conf_min, conf_din
-        self.tempo_estavel, self.tempo_din = tempo_estavel, tempo_din
+        self.janela_prob = janela_prob   # media das probabilidades (s): tira o tremor
+        self.conf_min = conf_min
+        self.tempo_estavel = tempo_estavel
         self.mov_limiar = mov_limiar
+        self.fim_movimento = fim_movimento
         self.janela_troca = janela_troca
-        self.tem_dinamicas = bool(LETRAS_DINAMICAS & set(rec.classes))
         self.mov = MovimentoMao()
         self.ultimo = ""
         self.reset()
@@ -276,63 +397,163 @@ class Soletrador:
         self.estavel, self.desde, self.emitido = "", 0.0, False
         self.mao_saiu = True
         self.t_ultima = -1e9
-        self.residuo = None          # letra estatica que sobra no fim de um J/Z
+        self.residuo = None
+        self.seg: Optional[_Segmento] = None
+        self.t_parou: Optional[float] = None
+        self.n_mov = 0                   # quadros seguidos em movimento
+        self.n_dif = 0                   # quadros seguidos com outra forma de mao
+        self.hist_prob: list = []
+        self.hist_raw: list = []
+        self.forma_ultimo = None         # forma da mao quando a ultima letra parada entrou
         self.mov.reset()
 
+    # ------------------------------------------------------------ estatica
+    def _top_suave(self, top: list, t: float) -> list:
+        """Media das probabilidades dos ultimos `janela_prob` segundos. Com a mao
+        parada, o tremor do MediaPipe faz a confianca oscilar (ex.: L entre 48%
+        e 86%) e zerava a contagem; a media estabiliza sem atrasar quase nada."""
+        self.hist_prob.append((t, dict(top)))
+        self.hist_prob = [(ti, d) for ti, d in self.hist_prob if t - ti <= self.janela_prob]
+        if len(self.hist_prob) == 1:
+            return top
+        n = len(self.hist_prob)
+        media = {l: sum(d.get(l, 0.0) for _, d in self.hist_prob) / n for l in self.rec.classes}
+        return sorted(media.items(), key=lambda x: -x[1])
+
+    def _raw_suave(self, raw: np.ndarray, t: float) -> np.ndarray:
+        """Media dos pontos da mao na mesma janela: o tremor fazia a distancia
+        entre as pontas (U x R x V) pular de uma faixa para outra."""
+        self.hist_raw.append((t, raw))
+        self.hist_raw = [(ti, r) for ti, r in self.hist_raw if t - ti <= self.janela_prob]
+        return np.mean([r for _, r in self.hist_raw], axis=0)
+
+    def _estatica(self, raw: np.ndarray, top: list) -> tuple[str, float]:
+        est = [(l, c) for l, c in top if l not in LETRAS_DINAMICAS] or top
+        letra, conf = est[0]
+        if eh_y(raw):
+            return "Y", max(conf, 0.95)
+        if letra in ("U", "R", "V"):
+            fam = sum(c for l, c in est if l in ("U", "R", "V"))
+            urv = letra_urv(raw)
+            if urv:
+                return urv, fam
+        return letra, conf
+
+    def _emitir(self, letra: str, t: float, dinamica: bool, base: Optional[set],
+                t_inicio: Optional[float] = None) -> Optional[str]:
+        # a janela da troca conta a partir do INICIO do gesto (o "I" entrou logo antes do "J")
+        ref = t if t_inicio is None else t_inicio
+        if dinamica and base and not self.mao_saiu and ref - self.t_ultima <= self.janela_troca \
+                and self.ultimo in base:
+            acao = "troca"
+        elif letra != self.ultimo or self.mao_saiu:
+            acao = "add"
+        else:
+            return None
+        self.ultimo, self.t_ultima, self.mao_saiu = letra, t, False
+        return acao
+
+    def _fechar_segmento(self, t: float, info: dict) -> None:
+        seg, self.seg = self.seg, None
+        self.n_dif = 0
+        letra = seg.letra() if seg else None
+        if not letra:
+            return
+        base = BASE_DINAMICA.get(letra)
+        if letra in ("Z", "X"):
+            # so troca a letra anterior se ela foi feita com o indicador esticado
+            # (o "D"/"L" que entrou antes do zigue-zague); no JUIZ, o "I" fica
+            base = {self.ultimo} if self.forma_ultimo == "INDICADOR" else set()
+        elif base is None:              # K: a letra parada do comeco do gesto
+            base = set(seg.estaticas[:3])
+        acao = self._emitir(letra, t, True, base, seg.t0)
+        if acao:
+            self.forma_ultimo = None
+            info.update(letra=letra, conf=1.0, aceita=True, acao=acao)
+            # o que sobra parado no fim do gesto e a letra da forma predominante
+            # (ex.: o "I" depois do "J"), nao a dos quadros de transicao
+            from collections import Counter
+            dom = seg.predominio(0.5)
+            norm = lambda f: "DOIS" if f in ("U", "R", "V", "DOIS") else f
+            do_gesto = [e for f, e in zip(seg.formas, seg.estaticas) if norm(f) == dom]
+            self.residuo = Counter(do_gesto).most_common(1)[0][0] if do_gesto else None
+            self.estavel, self.emitido = "", False
+
+    # ------------------------------------------------------------ quadro
     def update(self, landmarks: Optional[np.ndarray], t: Optional[float] = None) -> dict:
         import time as _time
         t = _time.time() if t is None else float(t)
         info = {"letra": "", "conf": 0.0, "top": [], "aceita": False, "acao": None,
                 "movendo": False}
         if landmarks is None:
+            if self.seg is not None:
+                self._fechar_segmento(t, info)
             self.estavel, self.emitido = "", False
             self.mao_saiu = True
             self.residuo = None
+            self.t_parou = None
+            self.hist_prob, self.hist_raw = [], []
             self.mov.update(None, t)
             return info
 
-        top = self.rec.predict_top(landmarks, len(self.rec.classes))
-        movimento = self.mov.update(landmarks, t)
-        movendo = movimento >= self.mov_limiar
-        din = [(l, c) for l, c in top[:2] if l in LETRAS_DINAMICAS]
-        if movendo and din and din[0][1] >= self.conf_din:
-            letra, conf = din[0]
-            dinamica = True
-        else:
-            est = [(l, c) for l, c in top if l not in LETRAS_DINAMICAS] or top
-            letra, conf = est[0]
-            dinamica = False
-        ok = conf >= (self.conf_din if dinamica else self.conf_min)
-        info.update(letra=letra, conf=conf, top=top[:3], aceita=ok, movendo=movendo)
+        raw = np.asarray(landmarks, dtype=np.float64).reshape(-1)
+        top = self._top_suave(self.rec.predict_top(raw, len(self.rec.classes)), t)
+        geo = self._raw_suave(raw, t)    # pose media: regras de geometria sem tremor
+        letra, conf = self._estatica(geo, top)
+        movendo = self.mov.update(raw, t) >= self.mov_limiar
+        self.n_mov = self.n_mov + 1 if movendo else 0
+        movendo = self.n_mov >= 2        # ignora picos de 1 quadro
+        info.update(letra=letra, conf=conf, top=top[:3], movendo=movendo)
 
+        if movendo:
+            self.t_parou = None
+            forma = forma_mao(raw)
+            if self.seg is not None and len(self.seg.formas) >= 4:
+                # a forma da mao mudou no meio do movimento: o gesto anterior acabou
+                # (ex.: o "J" emendado na transicao para a proxima letra)
+                dom = self.seg.predominio(0.5)
+                atual = "DOIS" if forma in ("U", "R", "V", "DOIS") else forma
+                # forma None = duvida (tremor), nao conta como troca nem zera a contagem
+                if dom is None:
+                    self.n_dif = 0
+                elif atual is not None:
+                    self.n_dif = self.n_dif + 1 if atual != dom else 0
+                if self.n_dif >= 2:
+                    self.n_dif = 0
+                    self._fechar_segmento(t, info)
+            if self.seg is None:
+                self.seg = _Segmento(t)
+            self.seg.add(t, forma, letra, top, raw, self.mov.tam.valor or 1.0)
+            self.estavel, self.emitido = "", False
+            return info                  # nada entra durante o gesto
+
+        ok = conf >= self.conf_min
+        info["aceita"] = ok
         if not ok:
             self.estavel, self.emitido = "", False
-            return info
-        if letra != self.estavel:
+        elif letra != self.estavel:
             self.estavel, self.desde, self.emitido = letra, t, False
-        espera = self.tempo_din if dinamica else self.tempo_estavel
-        if self.emitido or t - self.desde < espera:
-            return info
 
-        self.emitido = True
-        if not dinamica and self.residuo is not None:
-            if letra == self.residuo:
-                return info          # final parado de um J/Z: nao conta
-            self.residuo = None
-        base = None
-        if dinamica:   # letra estatica com a mesma forma de mao (ex.: I para o J)
-            est = [(l, c) for l, c in top if l not in LETRAS_DINAMICAS]
-            base = est[0][0] if est else None
-        if dinamica and not self.mao_saiu and t - self.t_ultima <= self.janela_troca \
-                and self.ultimo == base:
-            info["acao"] = "troca"    # o "I" que acabou de entrar era o comeco do "J"
-        elif letra != self.ultimo or self.mao_saiu:
-            info["acao"] = "add"
-        else:
+        if self.seg is not None:         # o gesto terminou? (a letra parada ja vai contando)
+            if self.t_parou is None:
+                self.t_parou = t
+            if t - self.t_parou < self.fim_movimento:
+                return info
+            self._fechar_segmento(t, info)
+            if info["acao"]:
+                return info
+
+        if not ok or self.emitido or t - self.desde < self.tempo_estavel:
             return info
-        if dinamica:
-            self.residuo = base
-        self.ultimo, self.t_ultima, self.mao_saiu = letra, t, False
+        self.emitido = True
+        if self.residuo is not None:
+            if letra == self.residuo:
+                return info              # final parado de um gesto: nao conta
+            self.residuo = None
+        acao = self._emitir(letra, t, False, None)
+        if acao:
+            self.forma_ultimo = forma_mao(geo)
+            info["acao"] = acao
         return info
 
 
