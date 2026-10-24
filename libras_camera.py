@@ -83,6 +83,7 @@ segmenter = SignSegmenter()
 texto: list[str] = []          # itens ja reconhecidos (letras e palavras)
 letra_atual: list[str] = []    # letras sendo soletradas
 stable, stable_count = "", 0
+mao_saiu = True     # repetir a mesma letra exige tirar a mao do quadro
 ultimo_top: list[tuple[str, float]] = []
 ultimo_ok: str | None = None
 t_prev = time.time()
@@ -127,13 +128,15 @@ while True:
             else:
                 stable, stable_count = letra, 1
             if stable_count == LETTER_STABLE_FRAMES and \
-                    (not letra_atual or letra_atual[-1] != stable):
+                    (not letra_atual or letra_atual[-1] != stable or mao_saiu):
                 letra_atual.append(stable)
+                mao_saiu = False
             if stable_count >= 2 and conf >= LETTER_CONF:
                 cv2.putText(frame, f"{stable} ({conf*100:.0f}%)", (20, 140),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
         else:
             stable, stable_count = "", 0
+            mao_saiu = True
 
     # ------------------------------------------------------- PALAVRAS
     else:
