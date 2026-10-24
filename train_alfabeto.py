@@ -22,7 +22,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import accuracy_score, classification_report
 
-from libres_features import N_LANDMARKS, N_COORDS, FEAT_DIM, normalize_landmarks
+from libres_features import (N_LANDMARKS, N_COORDS, FEAT_DIM, normalize_landmarks,
+                             alphabet_features, ALPHABET_FEATURE_VERSION)
 
 PROJECT_DIR = Path(__file__).parent
 PALAVRAS_DIR = PROJECT_DIR / "palavras2"
@@ -119,6 +120,34 @@ def espelhar(X: np.ndarray) -> np.ndarray:
     return out
 
 
+AUG_COPIAS = 4
+
+
+def aumentar(X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Variacoes realistas de uma pose: giro da palma para os lados (yaw),
+    para frente/tras (pitch), tamanho e tremor. Simula pessoas diferentes."""
+    r = X.reshape(-1, N_LANDMARKS, N_COORDS).copy()
+    n = len(r)
+    for eixo_a, eixo_b, lim in ((0, 2, 20), (1, 2, 15)):          # yaw (x-z), pitch (y-z)
+        a = np.radians(rng.uniform(-lim, lim, n))[:, None]
+        pa, pb = r[:, :, eixo_a].copy(), r[:, :, eixo_b].copy()
+        r[:, :, eixo_a] = np.cos(a) * pa + np.sin(a) * pb
+        r[:, :, eixo_b] = -np.sin(a) * pa + np.cos(a) * pb
+    r *= rng.uniform(0.9, 1.1, (n, 1, 1))
+    r += rng.normal(0, 0.03, r.shape)
+    return r.reshape(-1, FEAT_DIM)
+
+
+def preparar_treino(X: np.ndarray, y: np.ndarray, rng: np.random.Generator):
+    """Originais + espelhadas + AUG_COPIAS variacoes de cada -> features v2."""
+    base = np.vstack([X, espelhar(X)])
+    yb = np.concatenate([y, y])
+    partes, ys = [base], [yb]
+    for _ in range(AUG_COPIAS):
+        partes.append(aumentar(base, rng)); ys.append(yb)
+    return alphabet_features(np.vstack(partes)), np.concatenate(ys)
+
+
 def novo_modelo():
     return RandomForestClassifier(n_estimators=300, max_depth=None, min_samples_leaf=2,
                                   n_jobs=-1, random_state=42)
@@ -155,6 +184,7 @@ def main() -> None:
 
     # ---------------- avaliacao
     print("\n[2/3] Avaliacao...")
+    rng = np.random.default_rng(42)
     fontes = sorted(np.unique(groups))
     if len(fontes) >= 2:
         # deixa uma pessoa/fonte inteira de fora: mede se reconhece maos novas
@@ -164,34 +194,35 @@ def main() -> None:
             tr = ~te
             if len(np.unique(y[tr])) < 2:
                 continue
-            Xtr = np.vstack([X[tr], espelhar(X[tr])]); ytr = np.concatenate([y[tr], y[tr]])
+            Xtr, ytr = preparar_treino(X[tr], y[tr], rng)
             sc = StandardScaler().fit(Xtr)
             m = novo_modelo().fit(sc.transform(Xtr), ytr)
             validas = np.isin(y[te], np.unique(ytr))
-            acc = accuracy_score(y[te][validas], m.predict(sc.transform(X[te][validas])))
+            acc = accuracy_score(y[te][validas],
+                                 m.predict(sc.transform(alphabet_features(X[te][validas]))))
             accs.append(acc)
             print(f"    testando em {f:14s} (treino sem ele): {acc*100:5.1f}%")
         if accs:
             print(f"  >>> MEDIA por pessoa/fonte: {np.mean(accs)*100:.1f}% <<<")
     else:
-        rng = np.random.default_rng(42)
         idx = rng.permutation(len(X)); cut = int(len(X) * 0.8)
         tr, te = idx[:cut], idx[cut:]
-        Xtr = np.vstack([X[tr], espelhar(X[tr])]); ytr = np.concatenate([y[tr], y[tr]])
+        Xtr, ytr = preparar_treino(X[tr], y[tr], rng)
         sc = StandardScaler().fit(Xtr)
         m = novo_modelo().fit(sc.transform(Xtr), ytr)
-        acc = accuracy_score(y[te], m.predict(sc.transform(X[te])))
+        acc = accuracy_score(y[te], m.predict(sc.transform(alphabet_features(X[te]))))
         print(f"  So uma fonte de dados: teste 80/20 (otimista) = {acc*100:.1f}%")
         print("  Para medir com maos novas, colete com mais de uma pessoa (--pessoa 2, 3...).")
 
     # ---------------- modelo final com tudo (+ espelhado)
     print("\n[3/3] Treinando modelo final...")
-    Xall = np.vstack([X, espelhar(X)]); yall = np.concatenate([y, y])
+    Xall, yall = preparar_treino(X, y, rng)
     scaler = StandardScaler().fit(Xall)
     model = novo_modelo().fit(scaler.transform(Xall), yall)
     with open(OUTPUT_MODEL, "wb") as f:
         pickle.dump({"model": model, "scaler": scaler,
-                     "letters": sorted(np.unique(y).tolist())}, f)
+                     "letters": sorted(np.unique(y).tolist()),
+                     "feature_version": ALPHABET_FEATURE_VERSION}, f)
     print(f"Modelo salvo em: {OUTPUT_MODEL}  ({len(np.unique(y))} letras)")
 
 

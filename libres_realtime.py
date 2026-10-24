@@ -27,6 +27,7 @@ from typing import Optional
 import numpy as np
 
 from libres_features import (FEAT_DIM, FEATURE_VERSION, N_COORDS, N_LANDMARKS,
+                             alphabet_features, mirror_raw,
                              compute_enhanced_features, normalize_landmarks,
                              normalize_sequence)
 
@@ -164,15 +165,20 @@ class LetterRecognizer:
             data = pickle.load(f)
         self.model = data["model"]
         self.scaler = data["scaler"]
+        self.versao = data.get("feature_version", 1)   # 1 = modelo antigo (so coordenadas)
+
+    def _features(self, raw: np.ndarray) -> np.ndarray:
+        if self.versao >= 2:
+            return alphabet_features(raw)
+        return normalize_landmarks(raw)
 
     def predict_top(self, landmarks: np.ndarray, k: int = 3) -> list[tuple[str, float]]:
         """As k letras mais provaveis. Avalia a mao como esta e espelhada e fica
         com a versao mais confiante: os videos de treino nao sao espelhados e a
         camera e, e canhotos fazem as letras espelhadas."""
-        feat = normalize_landmarks(np.asarray(landmarks, dtype=np.float64).reshape(1, FEAT_DIM))
-        espelhada = feat.copy()
-        espelhada[:, 0::N_COORDS] *= -1
-        probas = self.model.predict_proba(self.scaler.transform(np.vstack([feat, espelhada])))
+        raw = np.asarray(landmarks, dtype=np.float64).reshape(1, FEAT_DIM)
+        duas = np.vstack([raw, mirror_raw(raw)])
+        probas = self.model.predict_proba(self.scaler.transform(self._features(duas)))
         proba = probas[int(probas.max(axis=1).argmax())]
         ordem = np.argsort(proba)[::-1][:k]
         return [(str(self.model.classes_[i]), float(proba[i])) for i in ordem]

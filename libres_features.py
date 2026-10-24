@@ -223,3 +223,37 @@ def compute_enhanced_features(seq: np.ndarray) -> np.ndarray:
         features.extend(trajectory_features(wrist_traj))
 
     return np.array(features)
+
+
+# --- ALFABETO (v2) ----------------------------------------------------------
+# Alem da forma da mao normalizada, o alfabeto v2 gira a mao para uma postura
+# padrao (punho -> base do dedo medio apontando para cima). Assim a mesma letra
+# feita com a mao um pouco inclinada -- cada pessoa inclina de um jeito --
+# gera as mesmas features. A inclinacao original nao se perde: vira 2 features
+# (seno e cosseno), e o modelo decide quanto ela importa. Somam-se os angulos
+# dos dedos e as distancias entre pontas, que nao dependem de rotacao.
+ALPHABET_FEATURE_VERSION: int = 2
+
+
+def alphabet_features(raw: np.ndarray) -> np.ndarray:
+    """(N, 63) ou (63,) landmarks crus -> (N, 89) features do alfabeto v2."""
+    r = normalize_landmarks(np.asarray(raw, dtype=np.float64).reshape(-1, FEAT_DIM))
+    r = r.reshape(-1, N_LANDMARKS, N_COORDS)
+    v = r[:, 9, :2]
+    phi = np.arctan2(v[:, 0], -v[:, 1])           # 0 quando o dedo medio aponta para cima
+    c, s = np.cos(phi), np.sin(phi)
+    x, y = r[:, :, 0], r[:, :, 1]
+    rot = r.copy()
+    rot[:, :, 0] = c[:, None] * x + s[:, None] * y
+    rot[:, :, 1] = -s[:, None] * x + c[:, None] * y
+    flat = rot.reshape(-1, FEAT_DIM)
+    ang = compute_finger_angles(flat)              # (N, 10)
+    rel = add_relative_features(flat)              # (N, 14)
+    return np.hstack([flat, ang, rel, np.sin(phi)[:, None], np.cos(phi)[:, None]])
+
+
+def mirror_raw(raw: np.ndarray) -> np.ndarray:
+    """Espelha landmarks crus (N, 63): troca mao direita <-> esquerda."""
+    out = np.asarray(raw, dtype=np.float64).reshape(-1, FEAT_DIM).copy()
+    out[:, 0::N_COORDS] *= -1
+    return out
