@@ -180,3 +180,62 @@ def accept_word(top: list[tuple[str, float]],
     p1 = top[0][1]
     p2 = top[1][1] if len(top) > 1 else 0.0
     return top[0][0] if p1 >= min_conf and (p1 - p2) >= min_margin else None
+
+
+def abrir_camera(largura: int = 1280, altura: int = 720):
+    """Abre a webcam testando indices e backends ate conseguir LER uma imagem.
+
+    No Windows o backend padrao (MSMF) as vezes abre a camera mas falha ao
+    ler ("can't grab frame", erro -1072875772); o DirectShow costuma funcionar.
+    Defina LIBRES_CAMERA=N para forcar o indice da camera.
+    """
+    import os
+    import sys
+    import time
+    import cv2
+
+    if sys.platform.startswith("win"):
+        backends = [(cv2.CAP_DSHOW, "DirectShow"), (cv2.CAP_MSMF, "MSMF"), (cv2.CAP_ANY, "padrao")]
+    else:
+        backends = [(cv2.CAP_ANY, "padrao")]
+    forcado = os.environ.get("LIBRES_CAMERA")
+    indices = [int(forcado)] if forcado is not None else [0, 1, 2]
+
+    for idx in indices:
+        for backend, nome in backends:
+            cap = cv2.VideoCapture(idx, backend)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
+            for _ in range(20):
+                ok, frame = cap.read()
+                if ok and frame is not None and frame.size:
+                    h, w = frame.shape[:2]
+                    print(f"Camera {idx} aberta via {nome} ({w}x{h})")
+                    return cap
+                time.sleep(0.05)
+            cap.release()
+    return None
+
+
+class LeitorCamera:
+    """Envolve cap.read() tolerando falhas momentaneas (comuns no Windows)."""
+
+    def __init__(self, cap, max_falhas: int = 60):
+        self.cap = cap
+        self.max_falhas = max_falhas
+        self.falhas = 0
+
+    def read(self):
+        import time
+        while True:
+            ok, frame = self.cap.read()
+            if ok and frame is not None:
+                self.falhas = 0
+                return True, frame
+            self.falhas += 1
+            if self.falhas >= self.max_falhas:
+                return False, None
+            time.sleep(0.02)

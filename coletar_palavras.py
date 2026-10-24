@@ -29,7 +29,7 @@ import mediapipe as mp
 import numpy as np
 
 from libres_features import FEAT_DIM
-from libres_realtime import SignSegmenter
+from libres_realtime import LeitorCamera, SignSegmenter, abrir_camera
 
 PROJECT_DIR = Path(__file__).parent
 COLETADOS_DIR = PROJECT_DIR / "coletados"
@@ -79,16 +79,11 @@ landmarker = mp.tasks.vision.HandLandmarker.create_from_options(
         min_tracking_confidence=0.5,
     ))
 
-cap = None
-for i in range(3):
-    cap = cv2.VideoCapture(i)
-    if cap.isOpened():
-        break
-    cap.release()
-else:
-    sys.exit("Nenhuma camera!")
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap = abrir_camera()
+if cap is None:
+    sys.exit("Nao foi possivel ler a camera. Feche outros apps que usam a webcam "
+         "(Teams, Discord, navegador, OBS) ou rode com LIBRES_CAMERA=1.")
+leitor = LeitorCamera(cap)
 
 segmenter = SignSegmenter()
 idx = 0
@@ -99,7 +94,7 @@ print(f"\n{prefixo} | palavras: {', '.join(palavras)} | meta: {args.takes} takes
 print("Faca o sinal e ABAIXE a mao. N/P = trocar palavra, D = apagar ultimo, Q = sair\n")
 
 while True:
-    ret, frame = cap.read()
+    ret, frame = leitor.read()
     if not ret:
         break
     frame = cv2.flip(frame, 1)

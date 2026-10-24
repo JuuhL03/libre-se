@@ -14,7 +14,8 @@ import cv2
 import numpy as np
 
 from libres_features import FEAT_DIM
-from libres_realtime import SignSegmenter, WordRecognizer, accept_word
+from libres_realtime import (LeitorCamera, SignSegmenter, WordRecognizer,
+                             abrir_camera, accept_word)
 
 PROJECT_DIR = Path(__file__).parent
 MODEL_PATH = PROJECT_DIR / "modelo_rotulado_xgb.pkl"
@@ -53,21 +54,11 @@ landmarker = HandLandmarker.create_from_options(hand_options)
 
 
 print("Inicializando camera...")
-# API padrao do OpenCV: funciona em Windows, Linux e macOS
-# (CAP_V4L2 e exclusivo do Linux e falhava em outros sistemas)
-cap = None
-for i in range(3):
-    cap = cv2.VideoCapture(i)
-    if cap.isOpened():
-        print(f"Camera encontrada no indice {i}")
-        break
-    cap.release()
-else:
-    print("Nenhuma camera!")
-    sys.exit(1)
-
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap = abrir_camera()
+if cap is None:
+    sys.exit("Nao foi possivel ler a camera. Feche outros apps que usam a webcam "
+         "(Teams, Discord, navegador, OBS) ou rode com LIBRES_CAMERA=1.")
+leitor = LeitorCamera(cap)
 
 segmenter = SignSegmenter()
 top: list[tuple[str, float]] = []
@@ -78,7 +69,7 @@ print("Pressione 'q' para sair")
 print("-" * 40)
 
 while True:
-    ret, frame = cap.read()
+    ret, frame = leitor.read()
     if not ret:
         break
 
