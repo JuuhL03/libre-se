@@ -36,11 +36,12 @@ LETRAS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 def letra_de(nome: str) -> str | None:
-    """'A', 'a', 'letra_A', 'A-libras' -> 'A'."""
+    """'A', 'a', 'letra_A', 'A-libras', 'D1', 'D2' -> letra. Variantes numeradas
+    da mesma letra (D1, D2: dois jeitos de fazer o D) viram a mesma classe."""
     n = nome.strip().upper()
     if n in LETRAS:
         return n
-    m = re.fullmatch(r"(?:LETRA[_\- ]?)?([A-Z])(?:[_\- ].*)?", n)
+    m = re.fullmatch(r"(?:LETRA[_\- ]?)?([A-Z])(?:\d+|[_\- ].*)?", n)
     return m.group(1) if m else None
 
 
