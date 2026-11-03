@@ -147,8 +147,8 @@ dialog { background: var(--painel); color: var(--texto); border: 1px solid var(-
 dialog::backdrop { background: rgba(0,0,0,.6); }
 dialog h2 { margin: 0 0 12px; font-size: 1.15rem; }
 dialog p { color: var(--suave); line-height: 1.45; margin: 0 0 12px; font-size: .92rem; }
-.luz-linha { display: flex; align-items: center; gap: 10px; font-size: .8rem; color: var(--suave); }
-.luz-linha input { flex: 1; accent-color: var(--cal); }
+dialog input#luz-valor { padding: 0; border: 0; background: none; accent-color: var(--cal); margin: 6px 0 2px; }
+.luz-linha { display: flex; justify-content: space-between; font-size: .8rem; color: var(--suave); }
 dialog label { display: block; font-size: .85rem; color: var(--suave); margin: 10px 0 4px; }
 dialog input, dialog textarea, dialog select { width: 100%; background: var(--fundo); color: var(--texto);
   border: 1px solid var(--linha); border-radius: 8px; padding: 10px; font: inherit; }

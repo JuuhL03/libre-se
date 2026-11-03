@@ -946,6 +946,7 @@ class ExposicaoCamera:
         self.backend = getattr(cam, "backend", "")
         self.manual = False
         self.inicial: dict = {}
+        self.nivel = 0                    # passos a partir do normal: voltar a 0 = automatico
 
     def _auto_valores(self) -> tuple[float, float]:
         # (manual, automatico) de CAP_PROP_AUTO_EXPOSURE: DirectShow usa 0.25/0.75; V4L2 1/3
@@ -955,6 +956,9 @@ class ExposicaoCamera:
         """passo -1 = mais escura, +1 = mais clara. Devolve o texto para o painel."""
         import cv2
         c = self.cap
+        if self.nivel + passo == 0 and (self.manual or self.nivel):
+            self.automatico()             # voltou ao ponto de partida: exposicao automatica de novo
+            return "exposicao da camera: normal (automatica)"
         if not self.inicial:
             self.inicial = {"exp": c.get(cv2.CAP_PROP_EXPOSURE), "auto": c.get(cv2.CAP_PROP_AUTO_EXPOSURE),
                             "brilho": c.get(cv2.CAP_PROP_BRIGHTNESS)}
@@ -968,10 +972,13 @@ class ExposicaoCamera:
         else:                             # V4L2: unidades de 100 us
             novo = float(max(1.0, atual * (1.5 if passo > 0 else 1 / 1.5)))
         if c.set(cv2.CAP_PROP_EXPOSURE, novo) and abs(c.get(cv2.CAP_PROP_EXPOSURE) - atual) > 1e-6:
-            return f"exposicao da camera: {novo:g} ({'mais clara' if passo > 0 else 'mais escura'}; E volta ao automatico)"
+            self.nivel += passo
+            return (f"exposicao da camera: {self.nivel:+d} em relacao ao normal "
+                    f"({'mais clara' if passo > 0 else 'mais escura'}; E volta ao normal)")
         brilho = c.get(cv2.CAP_PROP_BRIGHTNESS)       # sem exposicao manual: tenta o brilho
         passo_b = 16 if abs(brilho) > 2 else 0.06
         if c.set(cv2.CAP_PROP_BRIGHTNESS, brilho + passo * passo_b) and c.get(cv2.CAP_PROP_BRIGHTNESS) != brilho:
+            self.nivel += passo
             return f"brilho da camera: {c.get(cv2.CAP_PROP_BRIGHTNESS):g} (a camera nao deixa mudar a exposicao)"
         return "esta camera nao deixa mudar exposicao nem brilho: use fundo escuro e luz de frente"
 
@@ -982,7 +989,8 @@ class ExposicaoCamera:
         if self.inicial.get("brilho") is not None:
             self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.inicial["brilho"])
         self.manual = False
-        return "exposicao da camera: automatica"
+        self.nivel = 0
+        return "exposicao da camera: normal (automatica)"
 
 
 def estourada(frame) -> float:

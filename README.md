@@ -143,8 +143,8 @@ perde o contorno e o MediaPipe deixa de achá-la. Filtros na imagem (gama, CLAHE
 contraste) **não resolvem**: testamos em 283 fotos de mãos com luz forte simulada e
 a detecção caiu (ex.: 68,9% sem filtro → 43,5% com gama), porque a parte branca já
 não tem informação para recuperar. O que funciona é **a câmera captar menos luz**:
-no app, `[` escurece (e `E` volta ao automático); na página, **Mais → Luz da câmera**
-(tecla `L`). As duas avisam quando a imagem fica clara demais. Só funciona em câmeras
+no app, `[` escurece (e `E`, ou voltar com `]` até o início, volta ao automático); na página,
+**Mais → Luz da câmera** (tecla `L`): o meio da barra é o normal, à esquerda escurece. As duas avisam quando a imagem fica clara demais. Só funciona em câmeras
 que deixam mudar a exposição (a maioria das webcams USB e o Chrome no Android);
 nas outras, ajuda: fundo e roupa escuros, luz de frente (não atrás da pessoa) e
 afastar da janela.

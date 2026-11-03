@@ -116,12 +116,14 @@
       dedos voltam a ser achados. Roupa e fundo escuros também ajudam.</p>
     <div id="luz-controle">
       <label for="luz-valor">Exposição: <strong id="luz-texto">automática</strong></label>
-      <div class="luz-linha"><span>mais escura</span><input type="range" id="luz-valor"><span>mais clara</span></div>
+      <input type="range" id="luz-valor" min="-10" max="10" step="1" value="0" list="luz-marcas">
+      <datalist id="luz-marcas"><option value="0" label="normal"></option></datalist>
+      <div class="luz-linha"><span>◀ mais escura</span><span>normal</span><span>mais clara ▶</span></div>
     </div>
     <p id="luz-medida" class="suave"></p>
     <div class="botoes">
-      <button type="button" id="luz-auto">Automática</button>
-      <button value="ok" class="principal">Pronto</button>
+      <button type="button" id="luz-auto">Voltar ao normal</button>
+      <button value="ok" class="principal" autofocus>Pronto</button>
     </div>
   </form>
 </dialog>

@@ -254,8 +254,9 @@ async function usarStream(stream) {
   S.tQuadro = performance.now();
   S.mon = novoMonitor();
   S.luzInicial = trilha && trilha.getSettings ? trilha.getSettings() : {};
-  const luz = ler("libres.luz." + (S.camAtual || ""));
-  if (luz !== "") aplicarLuz(Number(luz)).catch(() => {});
+  S.luz = null;
+  const luz = ler(chaveLuz());
+  if (luz !== "" && Number(luz)) aplicarLuz(Number(luz)).catch(() => {});
   problemaImagem("");
   agendarQuadro();
   await listarCameras();
@@ -826,14 +827,16 @@ ui.acoes.addEventListener("click", (ev) => {
 $("#btn-camera").addEventListener("click", () => escolherCamera());
 $("#btn-luz").addEventListener("click", abrirLuz);
 $("#luz-valor").addEventListener("input", async (ev) => {
-  const v = Number(ev.target.value);
-  await aplicarLuz(v);
-  gravar("libres.luz." + (S.camAtual || ""), String(v));
+  let n = Number(ev.target.value);
+  if (Math.abs(n) < 1) n = 0;                        // o meio da barra e o normal (automatico)
+  await aplicarLuz(n === 0 ? null : n);
+  if (n === 0) esquecerLuz(); else gravar(chaveLuz(), String(n));
   mostrarLuz();
 });
 $("#luz-auto").addEventListener("click", async () => {
   await aplicarLuz(null);
-  try { localStorage.removeItem("libres.luz." + (S.camAtual || "")); } catch { /* sem armazenamento */ }
+  esquecerLuz();
+  $("#luz-valor").value = 0;
   mostrarLuz();
 });
 // depois de clicar, o botao perde o foco: o ESPACO do teclado nao "clica" nele de novo
@@ -884,17 +887,33 @@ function capacidadeLuz() {
   if (ok(c.brightness)) return { tipo: "brilho", ...faixa(c.brightness) };
   return null;
 }
-async function aplicarLuz(valor) {                    // valor null = automatica
+// A barra vai de -10 a +10 em relacao ao NORMAL (o automatico da camera): 0 e o meio.
+// Cada lado usa a faixa que a camera oferece daquele lado do normal, entao a barra e
+// coerente em qualquer camera (antes ela seguia o valor bruto, e o "normal" ficava
+// num ponto qualquer). O tempo de exposicao cresce em potencias de 2 (+-4 "pontos").
+const chaveLuz = () => "libres.luz2." + (S.camAtual || "");
+function esquecerLuz() { try { localStorage.removeItem(chaveLuz()); } catch { /* sem armazenamento */ } }
+function valorLuz(cap, nivel) {
+  const t = nivel / 10, ini = S.luzInicial || {}, lim = (v) => Math.min(cap.max, Math.max(cap.min, v));
+  if (cap.tipo === "compensacao") return lim(t < 0 ? -t * cap.min : t * cap.max);   // min < 0 < max
+  if (cap.tipo === "tempo") {
+    let base = Number(ini.exposureTime);
+    if (!(base >= cap.min && base <= cap.max)) base = lim(333);                       // ~1/30 s (100 us)
+    return lim(base * Math.pow(2, 4 * t));
+  }
+  let base = Number(ini.brightness);
+  if (!(base >= cap.min && base <= cap.max)) base = (cap.min + cap.max) / 2;
+  return lim(t < 0 ? base + t * (base - cap.min) : base + t * (cap.max - base));
+}
+async function aplicarLuz(nivel) {                    // nivel null/0 = normal (automatica)
   const t = trilhaVideo(), cap = capacidadeLuz();
   if (!t || !cap) return false;
-  const ini = S.luzInicial || {};
+  const normal = nivel == null || nivel === 0;
   let c;
-  if (cap.tipo === "compensacao") c = { exposureMode: "continuous", exposureCompensation: valor == null ? 0 : valor };
-  else if (cap.tipo === "tempo") c = valor == null ? { exposureMode: "continuous" } : { exposureMode: "manual", exposureTime: valor };
-  else c = { brightness: valor == null ? (ini.brightness ?? (cap.min + cap.max) / 2) : valor };
-  const v = valor == null ? null : Math.min(cap.max, Math.max(cap.min, valor));
-  if (v != null) c[cap.tipo === "compensacao" ? "exposureCompensation" : cap.tipo === "tempo" ? "exposureTime" : "brightness"] = v;
-  try { await t.applyConstraints({ advanced: [c] }); S.luz = v; return true; }
+  if (cap.tipo === "compensacao") c = { exposureMode: "continuous", exposureCompensation: normal ? 0 : valorLuz(cap, nivel) };
+  else if (cap.tipo === "tempo") c = normal ? { exposureMode: "continuous" } : { exposureMode: "manual", exposureTime: valorLuz(cap, nivel) };
+  else c = { brightness: valorLuz(cap, normal ? 0 : nivel) };
+  try { await t.applyConstraints({ advanced: [c] }); S.luz = normal ? null : nivel; return true; }
   catch (e) { console.warn("luz da camera:", e); return false; }
 }
 function mostrarMedidaLuz() {
@@ -905,26 +924,21 @@ function mostrarMedidaLuz() {
     : "";
 }
 function mostrarLuz() {
-  const cap = capacidadeLuz(), t = trilhaVideo(), s = t && t.getSettings ? t.getSettings() : {};
-  const atual = cap ? (cap.tipo === "compensacao" ? s.exposureCompensation : cap.tipo === "tempo" ? s.exposureTime : s.brightness) : null;
-  $("#luz-texto").textContent = S.luz == null ? "automática" : cap && cap.tipo === "compensacao"
-    ? `${S.luz > 0 ? "+" : ""}${Number(S.luz).toFixed(1)}` : String(Math.round(S.luz));
+  const n = S.luz || 0;
+  $("#luz-texto").textContent = n === 0 ? "normal (automática)"
+    : `${n > 0 ? "+" : "−"}${Math.abs(n)} (${n < 0 ? "mais escura" : "mais clara"} que o normal)`;
   const r = $("#luz-valor");
-  if (cap && document.activeElement !== r && atual != null) r.value = atual;
+  if (document.activeElement !== r) r.value = n;
 }
 function abrirLuz() {
-  const cap = capacidadeLuz(), r = $("#luz-valor");
+  const cap = capacidadeLuz();
   $("#luz-controle").hidden = !cap;
   $("#luz-auto").hidden = !cap;
-  if (cap) {
-    r.min = cap.min; r.max = cap.max; r.step = cap.step;
-    $("#luz-dica").dataset.extra = "";
-  } else {
-    $("#luz-medida").textContent = "";
-  }
+  if (!cap) $("#luz-medida").textContent = "";
   $("#luz-dica").textContent = cap
     ? "Com muita luz (pele clara, parede branca, lâmpada forte) a mão \"estoura\" e some para o reconhecimento. " +
-      "Diminua até a mão aparecer com contorno: a imagem fica mais escura, mas os dedos voltam a ser achados. " +
+      "Puxe para a esquerda até a mão aparecer com contorno: a imagem fica mais escura, mas os dedos voltam a ser achados. " +
+      "O meio da barra é o normal. " +
       "Roupa e fundo escuros também ajudam."
     : "Esta câmera não deixa o navegador mudar a exposição. Ajuste no app da câmera (no Windows, app Câmera → " +
       "configurações; no celular, toque na tela e arraste o sol para baixo), use roupa ou fundo escuros e evite luz atrás da pessoa.";
