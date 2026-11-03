@@ -4,6 +4,7 @@ __pycache__/
 *.pkl
 !modelo_rotulado_xgb.pkl
 !modelo_alfabeto.pkl
+!modelo_palavras_v3.pkl
 *.log
 coletados/
 youtube_videos/
@@ -16,5 +17,22 @@ venv/
 *.rar
 minds_videos/
 minds/
+minds_v3/
+coleta_v3/
+pose_landmarker_lite.task
 debug/
 saida_libras.txt
+
+# calibracao de cada pessoa (pontos das maos; dados pessoais)
+calibracao/
+
+# LIBRAS-EQT-UECE (CC BY-NC 4.0: nao redistribuir videos nem pontos extraidos)
+eqt_videos/
+eqt_v3/
+eqt_landmarks/
+
+# versao web: baixados pelo servidor/preparar_web.py e calibracao feita na pagina
+web/vendor/
+servidor/modelos/
+dados_web/
+.venv/

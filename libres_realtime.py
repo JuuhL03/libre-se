@@ -20,14 +20,15 @@ cada video e reduzido aos frames em que a mao aparece):
 
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
+from libres_modelos import carregar_modelo
 from libres_features import (FEAT_DIM, FEATURE_VERSION, N_COORDS, N_LANDMARKS,
-                             alphabet_features, mirror_raw, eh_y, forma_mao, letra_urv,
+                             alphabet_features, mirror_raw, eh_y, familia_forma, forma_mao,
+                             letra_urv,
                              compute_enhanced_features, normalize_landmarks,
                              normalize_sequence)
 
@@ -98,7 +99,8 @@ class SignSegmenter:
                  still_time: float = 1.0,
                  still_speed: float = 0.6,
                  min_motion: float = 1.0,
-                 rearm_speed: float = 1.8) -> None:
+                 rearm_speed: float = 1.8,
+                 cauda_parada: float = 0.0) -> None:
         """
         min_duration: sinais mais curtos (s) sao descartados como ruido
         min_frames  : minimo de quadros para classificar
@@ -109,6 +111,9 @@ class SignSegmenter:
         min_motion  : caminho minimo (maos) para a parada contar como fim de sinal
         rearm_speed : depois de encerrar por parada, so comeca outro sinal quando a
                       mao voltar a se mexer acima desta velocidade (maos/s)
+        cauda_parada: quanto (s) do trecho parado do fim fica no sinal. 0 = corta
+                      tudo (os videos do MINDS nao tem a mao parada no fim); na
+                      calibracao, sinais parados (numeros) precisam da mao parada
         """
         self.min_duration = min_duration
         self.min_frames = min_frames
@@ -118,6 +123,7 @@ class SignSegmenter:
         self.still_speed = still_speed
         self.min_motion = min_motion
         self.rearm_speed = rearm_speed
+        self.cauda_parada = cauda_parada
         self.reset()
 
     def reset(self) -> None:
@@ -212,26 +218,84 @@ class SignSegmenter:
             return None
         if parado:
             # corta a cauda parada: ela nao existe nos videos de treino
-            corte = next(i for i, ti in enumerate(self.tbuf) if ti >= self.still_since)
+            corte = next((i for i, ti in enumerate(self.tbuf) if ti >= self.still_since + self.cauda_parada),
+                         len(self.tbuf))
             self.buf, self.tbuf = self.buf[:max(corte, 1)], self.tbuf[:max(corte, 1)]
             self.waiting = True
             return self._emit()
         return None
 
 
+def normal_palma(r: np.ndarray) -> np.ndarray:
+    """Normal (unitaria) do plano da palma: punho, base do indicador e do minimo."""
+    n = np.cross(r[5] - r[0], r[17] - r[0])
+    return n / max(float(np.linalg.norm(n)), 1e-9)
+
+
+def angulo(a: np.ndarray, b: np.ndarray) -> float:
+    """Angulo (graus) entre dois vetores."""
+    c = float(np.dot(a, b) / max(float(np.linalg.norm(a) * np.linalg.norm(b)), 1e-9))
+    return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
+
+
+def isotropico(raw: np.ndarray, aspecto: float = 1.0) -> np.ndarray:
+    """Pontos do MediaPipe na mesma escala nos tres eixos. x vem dividido pela
+    largura da imagem e y pela altura: numa camera 16:9 um dedo apontando para
+    cima parece 1,78x maior do que apontando para o lado. z ja usa a escala de x."""
+    r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS).copy()
+    if aspecto != 1.0:
+        r[:, 1] /= aspecto
+    return r
+
+
+def tamanho_mao(r: np.ndarray) -> float:
+    """Tamanho da mao em 3D: media das distancias do punho as bases dos quatro
+    dedos. Nao muda quando a mao gira (o tamanho na imagem muda) e treme menos
+    que uma distancia so."""
+    return float(np.mean(np.linalg.norm(r[[5, 9, 13, 17]] - r[0], axis=1)))
+
+
+# distancias (em 3D, divididas pelo tamanho da mao) que descrevem a configuracao
+# da mao sem depender de posicao, tamanho ou giro: ponta de cada dedo ao punho
+# (dobrado x esticado), polegar ate a base do indicador, polegar ate as pontas
+# do indicador e do medio (O, K) e indicador ate o medio (U x V x R)
+_PARES_FORMA = ((4, 0), (8, 0), (12, 0), (16, 0), (20, 0), (4, 5), (4, 8), (4, 12), (8, 12))
+_PARES_A = [a for a, _ in _PARES_FORMA]
+_PARES_B = [b for _, b in _PARES_FORMA]
+
+
+def descritor_forma(r: np.ndarray, tam: Optional[float] = None) -> np.ndarray:
+    tam = tamanho_mao(r) if tam is None else tam
+    return np.linalg.norm(r[_PARES_A] - r[_PARES_B], axis=1) / max(tam, 1e-9)
+
+
 class MovimentoMao:
-    """Velocidade das pontas do indicador e do minimo (maos/s), suavizada.
-    Usada para separar letras paradas das letras com movimento."""
+    """Intensidade do movimento da mao em "tamanhos de mao por segundo", com tres
+    componentes, cada uma comparando a media do comeco e a do fim de uma janela
+    curta (o que cancela o tremor da deteccao):
+
+    - translacao das pontas do indicador e do minimo (J, Z, K, X de lado);
+    - mudanca de escala: a mao indo para tras ou para a frente (X);
+    - giro da palma: o vetor entre as bases do indicador e do minimo muda de
+      direcao/comprimento quando a mao gira (H), e a normal da palma (em 3D)
+      muda de direcao mesmo quando a mao ja comeca de lado.
+
+    update() devolve a maior delas, ja na escala do limiar (1,5)."""
+
+    ESCALA_REF = 0.25    # log do tamanho por segundo que equivale a 1,5 maos/s
+    GIRO_REF = 0.8       # mudanca do vetor da palma (em maos) por segundo idem (giro do H)
+    GIRO_ANG_REF = 90.0  # giro da normal da palma (graus por segundo) idem
 
     def __init__(self, janela: float = 0.3) -> None:
-        # so mede depois de ~0,25 s de mao no quadro: com poucos quadros a
-        # media nao cancela o tremor e a mao "parada" parecia se mexer
-        self._vel = _VelocidadeSuave(janela, min_span=0.8 * janela)
+        self.janela = janela
+        self.min_span = 0.8 * janela     # so mede depois de ~0,25 s de mao no quadro
         self.tam = _TamanhoMao()
+        self.reset()
 
     def reset(self) -> None:
-        self._vel.reset()
+        self.hist: list = []
         self.tam.reset()
+        self.ultimo = {"trans": 0.0, "escala": 0.0, "giro": 0.0}
 
     def update(self, landmarks: Optional[np.ndarray], t: Optional[float] = None) -> float:
         import time as _time
@@ -240,13 +304,46 @@ class MovimentoMao:
             self.reset()
             return 0.0
         r = np.asarray(landmarks, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
-        return self._vel.update(r[[8, 20], :2] / self.tam.update(r), t)
+        self.tam.update(r)
+        tam = max(tamanho_mao(r), 1e-6)
+        # escala pelo raio de giro dos 21 pontos (3D): media de muitos pontos treme
+        # ~4x menos que uma distancia so, entao da para ver o X indo para tras
+        # mesmo a 15 quadros/s; nao muda quando a mao gira
+        raio = max(float(np.sqrt(np.mean(np.sum((r - r.mean(axis=0)) ** 2, axis=1)))), 1e-6)
+        self.hist.append((t, r[[8, 20], :2].copy(), tam, (r[5, :2] - r[17, :2]) / tam, normal_palma(r), raio))
+        self.hist = [h for h in self.hist if t - h[0] <= max(self.janela, 0.6)]
+        dentro = [h for h in self.hist if t - h[0] <= self.janela]
+        # camera lenta ou falhas da deteccao no comeco da janela (comum no meio de
+        # um gesto rapido): estende a janela para tras, ate 0,6 s, em vez de zerar
+        # a velocidade (o que cortava o Z ao meio)
+        k = len(self.hist) - len(dentro)
+        while k > 0 and (len(dentro) < 4 or dentro[-1][0] - dentro[0][0] < self.min_span):
+            k -= 1
+            dentro = [self.hist[k]] + dentro
+        n = len(dentro)
+        self.ultimo = {"trans": 0.0, "escala": 0.0, "giro": 0.0, "giro_ang": 0.0}
+        # 3 quadros bastam se cobrem o tempo minimo (rajada de falhas no gesto)
+        if n < 3 or dentro[-1][0] - dentro[0][0] < self.min_span:
+            return 0.0
+        k = max(1, n // 3)
+        ini, fim = dentro[:k], dentro[-k:]
+        dt = np.mean([h[0] for h in fim]) - np.mean([h[0] for h in ini])
+        if dt <= 0:
+            return 0.0
+        tam_m = float(np.mean([h[2] for h in dentro]))
+        media = lambda grupo, j: np.mean([h[j] for h in grupo], axis=0)
+        trans = float(np.linalg.norm(media(fim, 1) - media(ini, 1), axis=1).max()) / tam_m / dt
+        escala = abs(float(np.mean([np.log(h[5]) for h in fim]) - np.mean([np.log(h[5]) for h in ini]))) / dt
+        giro = float(np.linalg.norm(media(fim, 3) - media(ini, 3))) / dt
+        giro_ang = angulo(media(ini, 4), media(fim, 4)) / dt
+        self.ultimo = {"trans": trans, "escala": escala, "giro": giro, "giro_ang": giro_ang}
+        return max(trans, escala / self.ESCALA_REF * 1.5, giro / self.GIRO_REF * 1.5,
+                   giro_ang / self.GIRO_ANG_REF * 1.5)
 
 
 class WordRecognizer:
     def __init__(self, model_path: Path) -> None:
-        with open(model_path, "rb") as f:
-            data = pickle.load(f)
+        data = carregar_modelo(model_path)
         if data.get("feature_version") != FEATURE_VERSION:
             raise RuntimeError(
                 f"{model_path.name} foi treinado com a versao antiga das features "
@@ -266,8 +363,7 @@ class WordRecognizer:
 
 class LetterRecognizer:
     def __init__(self, model_path: Path) -> None:
-        with open(model_path, "rb") as f:
-            data = pickle.load(f)
+        data = carregar_modelo(model_path)
         self.model = data["model"]
         self.scaler = data["scaler"]
         self.versao = data.get("feature_version", 1)   # 1 = modelo antigo (so coordenadas)
@@ -298,33 +394,52 @@ class LetterRecognizer:
 
 # Letras com movimento no alfabeto manual da Libras (H, J, K, X, Z).
 LETRAS_DINAMICAS = {"H", "J", "K", "X", "Z"}
-# letra parada que tem a mesma forma de mao do inicio de cada letra com movimento
-BASE_DINAMICA = {"J": {"I"}, "H": {"U", "V", "R"}, "Z": None, "X": None, "K": None}
 
 
 class _Segmento:
-    """Um trecho continuo de movimento da mao (candidato a H, J, K, X ou Z)."""
+    """Um trecho continuo de movimento da mao (candidato a H, J, K, X ou Z).
+
+    Os pontos chegam ja isotropicos (ver isotropico())."""
+
+    # variacao maxima do descritor_forma dentro do nucleo do gesto. Trocas de letra
+    # mudam o descritor em 0,4 a 1,5; girar a mao 75 graus com o z do MediaPipe
+    # subestimado pela metade muda ate ~0,3 (gancho) -> 0,4 separa os dois casos
+    TOL_FORMA = 0.4
 
     def __init__(self, t: float) -> None:
-        self.t0 = t
+        self.t0 = self.t1 = t
+        self.ts: list = []
         self.formas: list = []
         self.estaticas: list = []
-        self.top2: list = []
-        self.ponta: list = []       # ponta do indicador em "maos" (referencial da imagem)
+        self.top3: list = []
+        self.ponta: list = []       # ponta do indicador (imagem)
+        self.punho: list = []       # punho (imagem)
+        self.tams: list = []        # tamanho da mao (3D)
+        self.palma: list = []       # vetor base do indicador -> base do minimo, em maos
+        self.normais: list = []     # normal da palma (3D)
+        self.desc: list = []        # configuracao da mao (descritor_forma)
+        self.nucleo_ij: Optional[tuple] = None
 
-    def add(self, t, forma, estatica, top, raw, tam: float) -> None:
+    def add(self, t, forma, estatica, top, raw, tam: float = 1.0) -> None:
         r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+        tq = max(tamanho_mao(r), 1e-6)
+        self.ts.append(t)
         self.formas.append(forma)
         self.estaticas.append(estatica)
-        self.top2.append({l for l, _ in top[:2]})
-        self.ponta.append(r[8, :2] / tam)
+        self.top3.append({l for l, _ in top[:3]})
+        self.ponta.append(r[8, :2].copy())
+        self.punho.append(r[0, :2].copy())
+        self.tams.append(tq)
+        self.palma.append((r[5, :2] - r[17, :2]) / tq)
+        self.normais.append(normal_palma(r))
+        self.desc.append(descritor_forma(r, tq))
         self.t1 = t
 
-    def inversoes_x(self, minimo: float = 0.25) -> int:
-        """Quantas vezes a ponta do indicador muda de direcao na horizontal
-        (com histerese, para ignorar tremor). Z ~ 2 ou mais; X ~ 0 ou 1."""
-        xs = [p[0] for p in self.ponta]
-        n, ref, direcao = 0, xs[0] if xs else 0.0, 0
+    # ---------------------------------------------------------------- medidas
+    @staticmethod
+    def _inversoes(xs, minimo: float) -> int:
+        """Mudancas de direcao com histerese (ignora tremor)."""
+        n, ref, direcao = 0, xs[0] if len(xs) else 0.0, 0
         for x in xs[1:]:
             d = x - ref
             if direcao >= 0 and d < -minimo:
@@ -337,33 +452,127 @@ class _Segmento:
                 ref = x
         return n
 
-    def predominio(self, fracao: float = 0.6):
-        validas = [f for f in self.formas if f is not None]
-        if not validas:
+    def _janela(self, i: int, j: Optional[int]) -> tuple[int, int]:
+        n = len(self.formas)
+        return max(0, i), (n - 1 if j is None else min(j, n - 1))
+
+    def predominio(self, fracao: float = 0.6, i: int = 0, j: Optional[int] = None):
+        """Familia de forma predominante (DOIS, IND, I...) ou None, nos quadros i..j.
+
+        Conta so os quadros em que a forma foi reconhecida: no meio de um gesto
+        rapido a mao borra e varios quadros ficam sem forma (None), o que antes
+        derrubava o gesto inteiro. Exige forma reconhecida em 40% dos quadros."""
+        i, j = self._janela(i, j)
+        formas = self.formas[i:j + 1]
+        validas = [familia_forma(f) for f in formas if f is not None]
+        if not validas or len(validas) < 0.4 * len(formas):
             return None
         from collections import Counter
-        forma, n = Counter("DOIS" if f in ("U", "R", "V", "DOIS") else f for f in validas).most_common(1)[0]
-        return forma if n >= fracao * len(self.formas) else None
+        forma, n = Counter(validas).most_common(1)[0]
+        return forma if n >= fracao * len(validas) else None
+
+    def _quadros_em(self, segundos: float) -> int:
+        """Quadros (impar) que cabem em `segundos`, na taxa deste gesto."""
+        dur = max(self.t1 - self.t0, 1e-6)
+        k = int(segundos * (len(self.formas) - 1) / dur)
+        return max(1, k + (k % 2 == 0 and k > 1))
+
+    def _k_suave(self) -> int:
+        """Media movel de ~0,1 s (30 fps -> 3 quadros; 15 fps -> 1): tira o
+        tremor do caminho sem apagar o zigue-zague do Z."""
+        return self._quadros_em(0.1)
+
+    @staticmethod
+    def _suavizar(a: np.ndarray, k: int) -> np.ndarray:
+        a = np.asarray(a, dtype=np.float64)
+        if k <= 1 or len(a) < 3:
+            return a
+        pad = k // 2
+        ap = np.concatenate([np.repeat(a[:1], pad, 0), a, np.repeat(a[-1:], pad, 0)])
+        ker = np.ones(k) / k
+        return np.stack([np.convolve(ap[:, j], ker, mode="valid") for j in range(a.shape[1])], axis=1)
+
+    def nucleo(self) -> tuple[int, int]:
+        """O maior trecho em que a CONFIGURACAO da mao fica a mesma.
+
+        Uma letra com movimento mexe a mao inteira sem mudar a forma (o I do J,
+        o gancho do X); numa troca de letra (O -> L, K -> I) e a forma que muda.
+        O gesto costuma vir grudado na troca para a letra (A -> gancho -> X) ou
+        na troca seguinte (J -> U): o movimento que conta e o deste trecho."""
+        n = len(self.desc)
+        if n < 2:
+            return 0, n - 1
+        D = self._suavizar(np.array(self.desc), self._quadros_em(0.2))
+        melhor = (0, 0)
+        for i in range(n):
+            if n - 1 - i <= melhor[1] - melhor[0]:
+                break
+            mn = mx = D[i]
+            for j in range(i + 1, n):
+                mn, mx = np.minimum(mn, D[j]), np.maximum(mx, D[j])
+                if float((mx - mn).max()) > self.TOL_FORMA:
+                    break
+                if j - i > melhor[1] - melhor[0]:
+                    melhor = (i, j)
+        return melhor
+
+    def medidas(self, i: int = 0, j: Optional[int] = None) -> dict:
+        """Medidas do movimento nos quadros i..j (em tamanhos de mao)."""
+        i, j = self._janela(i, j)
+        sl = slice(i, j + 1)
+        k = self._k_suave()
+        un = float(np.median(self.tams[sl]))
+        P = self._suavizar(np.array(self.ponta[sl]) / un, k)
+        W = self._suavizar(np.array(self.punho[sl]) / un, k)
+        palma = self._suavizar(np.array(self.palma[sl]), k)
+        normais = self._suavizar(np.array(self.normais[sl]), k)
+        logt = self._suavizar(np.log(np.array(self.tams[sl]))[:, None], self._quadros_em(0.15))[:, 0]
+        n0 = np.mean(normais[:max(1, k)], axis=0)
+        return {"dur": self.ts[j] - self.ts[i], "n": j - i + 1,
+                "dx": float(np.ptp(P[:, 0])), "dy": float(np.ptp(P[:, 1])),
+                "wdx": float(np.ptp(W[:, 0])), "wdy": float(np.ptp(W[:, 1])),
+                "escala": float(np.ptp(logt)),
+                "giro": float(np.linalg.norm(palma - palma[0], axis=1).max()),
+                "giro_ang": max(angulo(n0, nv) for nv in normais),
+                "inv_x": self._inversoes(P[:, 0], 0.25) if len(P) else 0,
+                "kh": float(np.mean([bool(s & {"K", "H"}) for s in self.top3[sl]])),
+                "gancho": float(np.mean([f == "GANCHO" for f in self.formas[sl]]))}
 
     def letra(self) -> Optional[str]:
-        dur = self.t1 - self.t0
-        if dur < 0.3 or len(self.formas) < 4:
+        """Classifica o gesto pela forma da mao e pelo caminho, no nucleo (o
+        trecho com a forma constante): J = forma do I andando; Z = indicador
+        com zigue-zague que desce; X = indicador (esticado ou em gancho) andando
+        ou indo para tras, sem zigue-zague; K e H = indicador e medio levantados
+        (mesma forma), K subindo e descendo, H girando a mao ou indo para o lado."""
+        if not self.formas:
             return None
-        forma = self.predominio()
-        fim = [("DOIS" if f in ("U", "R", "V", "DOIS") else f) for f in self.formas[-max(2, len(self.formas) // 3):]]
-        mantida = forma is not None and fim.count(forma) >= len(fim) / 2   # a forma dura ate o fim
-        pts = np.array(self.ponta)
-        dx, dy = np.ptp(pts[:, 0]), np.ptp(pts[:, 1])
-        if mantida and forma == "I":
-            return "J"
-        if mantida and forma == "DOIS" and dx >= dy:
-            return "H"
-        if mantida and forma == "INDICADOR":
-            # Z: vai e volta na horizontal E desce (o traco diagonal); um X
-            # sacudido varias vezes tambem inverte a direcao, mas quase nao desce
-            return "Z" if self.inversoes_x() >= 2 and dy >= 0.3 * dx else "X"
-        if sum("K" in t for t in self.top2) >= 0.5 * len(self.top2):
-            return "K"
+        i, j = self.nucleo_ij = self.nucleo()
+        m = self.medidas(i, j)
+        # gesto curto, mas com movimento de verdade (a 15 quadros/s um X dura 4-5 quadros)
+        if m["dur"] < 0.19 or m["n"] < 3:
+            return None
+        # cada letra exige o seu tipo de movimento da MAO (nao dos dedos)
+        anda = max(m["wdx"], m["wdy"]) >= 0.25      # o punho andou (J, Z, X, K, H de lado)
+        # a mao foi para tras (X) sem girar: girando, a profundidade estimada pelo
+        # MediaPipe erra e o tamanho 3D da mao muda mesmo sem ela se afastar
+        recua = m["escala"] >= 0.08 and m["giro_ang"] < 30
+        gira = m["giro_ang"] >= 40                   # a palma girou (H)
+        if not (anda or recua or gira):
+            return None
+        forma = self.predominio(0.6, i, j)
+        if forma == "I":
+            return "J" if anda else None
+        if forma == "IND":
+            if not (anda or recua):
+                return None
+            if m["inv_x"] >= 2 and m["dy"] >= 0.3 * m["dx"] and m["gancho"] < 0.5:
+                return "Z"
+            return "X"
+        if forma == "DOIS" or m["kh"] >= 0.5:
+            if m["wdy"] >= 0.35 and m["wdy"] >= 1.2 * m["wdx"]:
+                return "K"               # sobe e desce
+            if gira or (m["wdx"] >= 0.5 and m["wdx"] >= m["wdy"]):
+                return "H"               # gira a mao (ou vai para o lado)
         return None
 
 
@@ -373,11 +582,14 @@ class Soletrador:
     - mao PARADA: letra estatica (modelo + regras de geometria para Y e para
       desempatar U/R/V), sobre a media dos ultimos 0,2 s (probabilidades e
       pontos da mao, contra o tremor); precisa ficar estavel ~0,3 s;
-    - mao EM MOVIMENTO: nada entra durante o gesto; quando o movimento termina,
-      ele e classificado como H, J, K, X ou Z pela forma da mao e pelo caminho
-      (J = forma de I; H = U/V com movimento lateral; Z = indicador em
-      zigue-zague que desce; X = indicador com movimento curto, sem descer;
-      K = indicado pelo modelo);
+    - mao EM MOVIMENTO (translacao, ida para tras ou giro; acima de 1,5 mao/s,
+      ou de 1,0 mantido por 0,25 s): nada entra durante o gesto; quando ele
+      termina, e classificado como H, J, K, X ou Z pela forma da mao e pelo
+      movimento, medido so no trecho em que a forma nao muda (ver
+      _Segmento.nucleo e _Segmento.letra);
+    - falhas da deteccao nao contam como "mao saiu": ate 0,35 s com a mao
+      parada e ate 0,6 s no meio de um movimento (a mao borrada some mais);
+      o gesto continua e nenhuma letra se repete;
     - letra repetida (OSSO) exige tirar a mao do quadro entre as duas;
     - se a letra parada que acabou de entrar era o comeco do gesto (o "I" do
       "J"), ela e trocada pela letra com movimento.
@@ -385,15 +597,23 @@ class Soletrador:
 
     def __init__(self, rec: "LetterRecognizer", conf_min: float = 0.55,
                  tempo_estavel: float = 0.3, mov_limiar: float = 1.5,
-                 fim_movimento: float = 0.25, janela_troca: float = 1.5,
-                 janela_prob: float = 0.2) -> None:
+                 fim_movimento: float = 0.25, janela_troca: float = 4.0,
+                 janela_prob: float = 0.2, tempo_ausente: float = 0.35,
+                 mov_saida: float = 0.6, aspecto: float = 1.0) -> None:
         self.rec = rec
+        self.aspecto = aspecto           # largura / altura da imagem (pontos isotropicos)
         self.janela_prob = janela_prob   # media das probabilidades (s): tira o tremor
         self.conf_min = conf_min
         self.tempo_estavel = tempo_estavel
         self.mov_limiar = mov_limiar
         self.fim_movimento = fim_movimento
         self.janela_troca = janela_troca
+        self.tempo_ausente = tempo_ausente
+        # no meio de um gesto a deteccao falha mais (mao borrada): so conta como
+        # "mao saiu" depois de mais tempo (o Z continua depois de 0,4 s sem mao)
+        self.tempo_ausente_gesto = max(tempo_ausente, 0.6)
+        self.mov_saida = mov_saida       # histerese: o gesto continua acima de 60% do limiar
+        self.mov_lento = 2 / 3           # movimento lento e sustentado (0,25 s) tambem e gesto
         self.mov = MovimentoMao()
         self.ultimo = ""
         self.reset()
@@ -405,11 +625,20 @@ class Soletrador:
         self.residuo = None
         self.seg: Optional[_Segmento] = None
         self.t_parou: Optional[float] = None
+        self.t_ult_parado: Optional[float] = None   # ultimo quadro VISTO parado (pausa real)
         self.n_mov = 0                   # quadros seguidos em movimento
+        self.t_lento: Optional[float] = None   # inicio do movimento lento atual
+        self.em_gesto = False
+        self.t_q_ant: Optional[float] = None
+        self.recentes: list = []         # quadros parados recentes (comeco do gesto)
+        self.t_fim_seg = -1e9
         self.n_dif = 0                   # quadros seguidos com outra forma de mao
         self.hist_prob: list = []
         self.hist_raw: list = []
-        self.forma_ultimo = None         # forma da mao quando a ultima letra parada entrou
+        self.forma_ultimo = None         # familia da forma quando a ultima letra parada entrou
+        self.t_mao: Optional[float] = None   # ultimo quadro com mao
+        self.fora = True                 # a saida da mao ja foi tratada
+        self.info_ant: Optional[dict] = None
         self.mov.reset()
 
     # ------------------------------------------------------------ estatica
@@ -460,17 +689,27 @@ class Soletrador:
 
     def _fechar_segmento(self, t: float, info: dict) -> None:
         seg, self.seg = self.seg, None
+        # os quadros parados depois do ultimo quadro do gesto ainda podem ser o
+        # comeco do proximo (a mao para um instante entre a troca e o X)
+        self.t_fim_seg = seg.t1 if seg is not None else t
         self.n_dif = 0
         letra = seg.letra() if seg else None
         if not letra:
             return
-        base = BASE_DINAMICA.get(letra)
-        if letra in ("Z", "X"):
-            # so troca a letra anterior se ela foi feita com o indicador esticado
-            # (o "D"/"L" que entrou antes do zigue-zague); no JUIZ, o "I" fica
-            base = {self.ultimo} if self.forma_ultimo == "INDICADOR" else set()
-        elif base is None:              # K: a letra parada do comeco do gesto
-            base = set(seg.estaticas[:3])
+        i, j = seg.nucleo_ij or (0, len(seg.formas) - 1)
+        dom = seg.predominio(0.5, i, j)
+        # so troca a letra parada anterior se ela tinha a mesma forma de mao do
+        # gesto (o "I" antes do "J", o "D" antes do "Z", o "V" antes do "H");
+        # no JUIZ, o "I" fica. Sem forma clara (K pelo modelo), vale a letra
+        # parada vista no comeco do gesto.
+        if letra == "J":
+            base = {"I"}
+        elif dom is not None and self.forma_ultimo == dom:
+            base = {self.ultimo}
+        elif dom is None:
+            base = set(seg.estaticas[i:i + 3])
+        else:
+            base = set()
         acao = self._emitir(letra, t, True, base, seg.t0)
         if acao:
             self.forma_ultimo = None
@@ -478,11 +717,46 @@ class Soletrador:
             # o que sobra parado no fim do gesto e a letra da forma predominante
             # (ex.: o "I" depois do "J"), nao a dos quadros de transicao
             from collections import Counter
-            dom = seg.predominio(0.5)
-            norm = lambda f: "DOIS" if f in ("U", "R", "V", "DOIS") else f
-            do_gesto = [e for f, e in zip(seg.formas, seg.estaticas) if norm(f) == dom]
+            do_gesto = [e for f, e in zip(seg.formas[i:j + 1], seg.estaticas[i:j + 1])
+                        if familia_forma(f) == dom]
             self.residuo = Counter(do_gesto).most_common(1)[0][0] if do_gesto else None
-            self.estavel, self.emitido = "", False
+            # a letra parada que ja vinha contando continua (se for a da forma do
+            # gesto, o residuo impede que ela entre de novo)
+            self.emitido = False
+
+    def _limite_ausente(self) -> float:
+        # a mao sumiu NO MEIO de um movimento (gesto ou movimento lento comecando):
+        # mao borrada, nao "mao saiu". Se ja tinha parado, vale o tempo normal.
+        lento = self.t_lento is not None and self.t_mao is not None and self.t_mao - self.t_lento >= 0.1
+        return self.tempo_ausente_gesto if (self.em_gesto or lento) else self.tempo_ausente
+
+    def finalizar(self, t: Optional[float] = None) -> dict:
+        """Fecha o gesto que estiver aberto (ex.: antes de trocar de modo ou de
+        sair), como se a mao tivesse saido do quadro. Devolve o info do update."""
+        import time as _time
+        t = _time.time() if t is None else float(t)
+        info = {"letra": "", "conf": 0.0, "top": [], "aceita": False, "acao": None, "movendo": False}
+        if self.seg is not None:
+            self._mao_saiu(t, info)
+        return info
+
+    def _mao_saiu(self, t: float, info: dict) -> None:
+        """A mao ficou fora do quadro tempo suficiente: fecha o gesto e libera a
+        repeticao de letras."""
+        if self.seg is not None:
+            self._fechar_segmento(t, info)
+        self.estavel, self.emitido = "", False
+        self.mao_saiu = True
+        self.residuo = None
+        self.t_parou = self.t_ult_parado = None
+        self.hist_prob, self.hist_raw = [], []
+        self.n_mov = 0
+        self.t_lento = None
+        self.em_gesto = False
+        self.t_q_ant = None
+        self.recentes = []
+        self.mov.reset()
+        self.fora = True
 
     # ------------------------------------------------------------ quadro
     def update(self, landmarks: Optional[np.ndarray], t: Optional[float] = None) -> dict:
@@ -491,33 +765,72 @@ class Soletrador:
         info = {"letra": "", "conf": 0.0, "top": [], "aceita": False, "acao": None,
                 "movendo": False}
         if landmarks is None:
-            if self.seg is not None:
-                self._fechar_segmento(t, info)
-            self.estavel, self.emitido = "", False
-            self.mao_saiu = True
-            self.residuo = None
-            self.t_parou = None
-            self.hist_prob, self.hist_raw = [], []
-            self.mov.update(None, t)
+            if self.fora or self.t_mao is None:
+                return info
+            if t - self.t_mao >= self._limite_ausente():
+                self._mao_saiu(t, info)
+                return info
+            # falha curta da deteccao: mantem tudo (gesto, contagem) e repete a tela
+            if self.info_ant:
+                info.update({k: v for k, v in self.info_ant.items() if k != "acao"})
             return info
+
+        if not self.fora and self.t_mao is not None and t - self.t_mao >= self._limite_ausente():
+            self._mao_saiu(t, info)          # camera lenta: a saida so aparece agora
+            if info["acao"]:
+                self.t_mao, self.fora = t, False
+                return info
+        self.t_mao, self.fora = t, False
 
         raw = np.asarray(landmarks, dtype=np.float64).reshape(-1)
         top = self._top_suave(self.rec.predict_top(raw, len(self.rec.classes)), t)
         geo = self._raw_suave(raw, t)    # pose media: regras de geometria sem tremor
         letra, conf = self._estatica(geo, top)
-        movendo = self.mov.update(raw, t) >= self.mov_limiar
-        self.n_mov = self.n_mov + 1 if movendo else 0
-        movendo = self.n_mov >= 2        # ignora picos de 1 quadro
+        iso = isotropico(raw, self.aspecto)     # medidas de movimento: mesma escala em x, y, z
+        vel = self.mov.update(iso, t)
+        dt_q = t - self.t_q_ant if self.t_q_ant is not None else 1 / 30
+        self.t_q_ant = t
+        if self.em_gesto:
+            # histerese: dentro de um gesto basta 60% do limiar para continuar;
+            # sem isso o K (sobe, para la em cima, desce) virava dois pedacos curtos
+            self.em_gesto = vel >= self.mov_saida * self.mov_limiar
+            if not self.em_gesto:
+                self.n_mov = 0
+                self.t_lento = None
+        else:
+            self.n_mov = self.n_mov + 1 if vel >= self.mov_limiar else 0
+            # movimento mais lento, mas sustentado (um J pequeno e devagar): 2/3 do
+            # limiar por 0,25 s seguidos tambem conta (o tremor nao se sustenta)
+            if vel >= self.mov_lento * self.mov_limiar:
+                self.t_lento = t if self.t_lento is None else self.t_lento
+            else:
+                self.t_lento = None
+            # ignora picos de 1 quadro (a 10 quadros/s, 1 quadro ja e 0,1 s)
+            self.em_gesto = (self.n_mov >= 2 or (self.n_mov >= 1 and dt_q >= 0.08)
+                             or (self.t_lento is not None and t - self.t_lento >= 0.25))
+        movendo = self.em_gesto
         info.update(letra=letra, conf=conf, top=top[:3], movendo=movendo)
 
+        forma = forma_mao(raw)
         if movendo:
-            self.t_parou = None
-            forma = forma_mao(raw)
+            # pausa = tempo em que a mao foi VISTA parada (quadros sem mao no meio de
+            # um gesto rapido nao sao pausa: antes cortavam o Z em dois)
+            pausa = 0.0 if self.t_parou is None or self.t_ult_parado is None else \
+                (self.t_ult_parado - self.t_parou) + min(t - self.t_ult_parado, 1 / 15)
+            if self.seg is not None and pausa >= 0.15:
+                # a mao parou um instante e voltou a mexer: o gesto anterior acabou
+                # (ex.: o H seguido da troca para o O, sem tirar a mao)
+                self._fechar_segmento(t, info)
+                if info["acao"]:
+                    self.t_parou = self.t_ult_parado = None
+                    self.info_ant = dict(info)
+                    return info
+            self.t_parou = self.t_ult_parado = None
             if self.seg is not None and len(self.seg.formas) >= 4:
                 # a forma da mao mudou no meio do movimento: o gesto anterior acabou
                 # (ex.: o "J" emendado na transicao para a proxima letra)
                 dom = self.seg.predominio(0.5)
-                atual = "DOIS" if forma in ("U", "R", "V", "DOIS") else forma
+                atual = familia_forma(forma)
                 # forma None = duvida (tremor), nao conta como troca nem zera a contagem
                 if dom is None:
                     self.n_dif = 0
@@ -527,11 +840,29 @@ class Soletrador:
                     self.n_dif = 0
                     self._fechar_segmento(t, info)
             if self.seg is None:
-                self.seg = _Segmento(t)
-            self.seg.add(t, forma, letra, top, raw, self.mov.tam.valor or 1.0)
-            self.estavel, self.emitido = "", False
+                # o movimento so e detectado alguns quadros depois de comecar (a
+                # velocidade e media de 0,3 s): o gesto inclui os ultimos 0,3 s
+                # parados, para medir o giro/caminho inteiro (sobretudo a 15 fps)
+                pre = [q for q in self.recentes if q[0] > self.t_fim_seg]
+                dentro = [q for q in pre if q[0] >= t - 0.3]
+                # falhas da deteccao logo antes do gesto: pega os ultimos 3 quadros
+                # vistos (ate 0,65 s), para ter a posicao/giro de partida
+                pre = dentro if len(dentro) >= 3 else pre[-3:]
+                self.seg = _Segmento(pre[0][0] if pre else t)
+                for q in pre:
+                    self.seg.add(*q, self.mov.tam.valor or 1.0)
+            self.seg.add(t, forma, letra, top, iso, self.mov.tam.valor or 1.0)
+            if vel >= self.mov_limiar:
+                self.estavel, self.emitido = "", False
+            elif conf >= self.conf_min and letra != self.estavel:
+                # finalzinho do gesto (abaixo do limiar, dentro da histerese): a letra
+                # parada ja comeca a contar, para nao atrasar a proxima letra
+                self.estavel, self.desde, self.emitido = letra, t, False
+            self.info_ant = dict(info)
             return info                  # nada entra durante o gesto
 
+        self.recentes.append((t, forma, letra, top, iso))
+        self.recentes = [q for q in self.recentes if t - q[0] <= 0.65]
         ok = conf >= self.conf_min
         info["aceita"] = ok
         if not ok:
@@ -542,23 +873,30 @@ class Soletrador:
         if self.seg is not None:         # o gesto terminou? (a letra parada ja vai contando)
             if self.t_parou is None:
                 self.t_parou = t
+            if vel < self.mov_saida * self.mov_limiar:
+                self.t_ult_parado = t        # parada de verdade (nao o 1o quadro de um movimento)
             if t - self.t_parou < self.fim_movimento:
+                self.info_ant = dict(info)
                 return info
             self._fechar_segmento(t, info)
             if info["acao"]:
+                self.info_ant = dict(info)
                 return info
 
         if not ok or self.emitido or t - self.desde < self.tempo_estavel:
+            self.info_ant = dict(info)
             return info
         self.emitido = True
         if self.residuo is not None:
             if letra == self.residuo:
+                self.info_ant = dict(info)
                 return info              # final parado de um gesto: nao conta
             self.residuo = None
         acao = self._emitir(letra, t, False, None)
         if acao:
-            self.forma_ultimo = forma_mao(geo)
+            self.forma_ultimo = familia_forma(forma_mao(geo))
             info["acao"] = acao
+        self.info_ant = dict(info)
         return info
 
 
@@ -572,82 +910,226 @@ def accept_word(top: list[tuple[str, float]],
     return top[0][0] if p1 >= min_conf and (p1 - p2) >= min_margin else None
 
 
-def abrir_camera(largura: int = 1280, altura: int = 720):
-    """Abre a webcam testando indices e backends ate conseguir uma IMAGEM de verdade.
+class Camera:
+    """cv2.VideoCapture que sabe qual camera e: `indice`, `backend`,
+    `resolucao` (largura, altura) e `estado` da imagem ao abrir ("ok", "imagem
+    parada" ou "so imagem preta"). Todo o resto (read, set, get, isOpened...)
+    e repassado ao VideoCapture."""
 
-    - No Windows o backend padrao (MSMF) as vezes abre mas nao le ("can't grab
-      frame", erro -1072875772 = camera em uso por outro programa); o DirectShow
-      costuma funcionar.
-    - Cameras virtuais (NVIDIA Broadcast, OBS, Snap Camera...) podem abrir e
-      entregar so imagem PRETA quando o programa delas nao esta transmitindo:
-      essas sao puladas e so usadas como ultimo recurso.
-    Defina LIBRES_CAMERA=N para forcar o indice da camera.
-    """
-    import os
+    def __init__(self, cap, indice: int, backend: str, resolucao: tuple[int, int],
+                 estado: str = "ok") -> None:
+        self.cap = cap
+        self.indice = indice
+        self.backend = backend
+        self.resolucao = resolucao
+        self.estado = estado
+
+    def read(self):
+        return self.cap.read()
+
+    def release(self) -> None:
+        self.cap.release()
+
+    def __getattr__(self, nome):
+        return getattr(self.cap, nome)
+
+
+def _backends() -> list:
     import sys
+    import cv2
+    if sys.platform.startswith("win"):
+        return [(cv2.CAP_DSHOW, "DirectShow"), (cv2.CAP_MSMF, "MSMF"), (cv2.CAP_ANY, "padrao")]
+    return [(cv2.CAP_ANY, "padrao")]
+
+
+def _imagem_parada(cap, quadro, segundos: float = 1.2) -> bool:
+    """True se a imagem nao muda NADA por ~1 s. Camera de verdade sempre tem
+    ruido do sensor, entao dois quadros nunca saem identicos; imagem identica e
+    camera virtual mostrando uma tela fixa (OBS com a camera virtual desligada,
+    NVIDIA Broadcast, DroidCam sem o celular...) ou tampa de privacidade."""
+    import time
+    ref = quadro[::4, ::4].copy()
+    lidos = 0
+    t0 = time.time()
+    while time.time() - t0 < segundos:
+        ok, q = cap.read()
+        if ok and q is not None and q.shape == quadro.shape:
+            lidos += 1
+            if not np.array_equal(q[::4, ::4], ref):
+                return False
+        time.sleep(0.03)
+    return lidos >= 3
+
+
+def _abrir_indice(idx: int, largura: int, altura: int, exigente: bool):
+    """Abre a camera `idx` testando os backends. Devolve (Camera|None, motivo, backend).
+
+    exigente=True (escolha automatica): so devolve a camera se a imagem estiver
+    viva; preta ou parada volta como None com o motivo. exigente=False (camera
+    escolhida pelo usuario): devolve qualquer camera que entregue imagem."""
     import time
     import cv2
-
-    if sys.platform.startswith("win"):
-        backends = [(cv2.CAP_DSHOW, "DirectShow"), (cv2.CAP_MSMF, "MSMF"), (cv2.CAP_ANY, "padrao")]
-    else:
-        backends = [(cv2.CAP_ANY, "padrao")]
-    forcado = os.environ.get("LIBRES_CAMERA")
-    indices = [int(forcado)] if forcado is not None else [0, 1, 2, 3]
-
-    def tentar(idx, backend):
+    for backend, nome in _backends():
         cap = cv2.VideoCapture(idx, backend)
         if not cap.isOpened():
             cap.release()
-            return None, "nao abriu"
+            continue
         # muitas webcams so entregam 10 fps em 1280x720 no formato padrao (YUY2);
         # em MJPG chegam a 30 fps
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
         cap.set(cv2.CAP_PROP_FPS, 30)
-        leu = False
+        quadro = None
         t0 = time.time()
-        while time.time() - t0 < 2.5:          # tempo para a exposicao automatica
-            ok, frame = cap.read()
-            if ok and frame is not None and frame.size:
-                leu = True
-                if float(frame.mean()) > 8.0:  # tem imagem de verdade
-                    return cap, "ok"
+        while time.time() - t0 < (2.5 if exigente else 1.0):   # exposicao automatica
+            ok, q = cap.read()
+            if ok and q is not None and q.size:
+                quadro = q
+                if float(q.mean()) > 8.0:          # tem imagem de verdade
+                    break
             else:
                 time.sleep(0.03)
-        cap.release()
-        return None, ("so imagem preta" if leu else "nao entregou imagem")
+        if quadro is None:
+            # o indice existe, mas a camera nao manda imagem (em uso por outro
+            # programa); outro backend nao resolve
+            cap.release()
+            return None, "nao entregou imagem", nome
+        if float(quadro.mean()) <= 8.0:
+            estado = "so imagem preta"
+        elif exigente and _imagem_parada(cap, quadro):
+            estado = "imagem parada"
+        else:
+            estado = "ok"
+        if exigente and estado != "ok":
+            cap.release()
+            return None, estado, nome
+        h, w = quadro.shape[:2]
+        return Camera(cap, idx, nome, (w, h), estado), estado, nome
+    return None, "nao abriu", None
 
-    reserva = None
+
+_DICAS_CAMERA = ("Dicas: feche programas que usam a webcam (Teams, Discord, navegador, OBS,\n"
+                 "NVIDIA Broadcast) ou escolha a camera pelo numero: --camera 0, 1, 2...")
+
+
+def abrir_camera(largura: int = 1280, altura: int = 720, indice: Optional[int] = None,
+                 avisar: bool = True):
+    """Abre a webcam e devolve uma Camera (ou None).
+
+    indice=None (padrao): testa as cameras 0 a 5 e fica com a primeira de imagem
+    VIVA. Pula as que so mandam imagem preta (NVIDIA Broadcast, OBS... quando o
+    programa delas nao esta transmitindo) e as de imagem PARADA (camera virtual
+    do OBS desligada, DroidCam sem o celular...); essas so sao usadas se nao
+    houver outra.
+    indice=N (ou a variavel de ambiente LIBRES_CAMERA=N): abre exatamente a
+    camera N, mesmo que a imagem esteja preta ou parada.
+    No Windows o backend padrao (MSMF) as vezes abre mas nao le ("can't grab
+    frame" = camera em uso por outro programa); o DirectShow e testado primeiro.
+    """
+    import os
+
+    if indice is None and os.environ.get("LIBRES_CAMERA", "").strip():
+        indice = int(os.environ["LIBRES_CAMERA"])
+    if indice is not None:
+        cam, motivo, nome = _abrir_indice(indice, largura, altura, exigente=False)
+        if avisar:
+            if cam is None:
+                print(f"Camera {indice}: {motivo}." + (f" (via {nome})" if nome else ""))
+                print(_DICAS_CAMERA)
+            else:
+                w, h = cam.resolucao
+                print(f"Camera {indice} aberta via {nome} ({w}x{h})"
+                      + ("  [imagem preta]" if cam.estado != "ok" else ""))
+        return cam
+
+    pulei, reserva = [], None
     relatorio = []
-    for idx in indices:
-        for backend, nome in backends:
-            cap, motivo = tentar(idx, backend)
-            if cap is not None:
-                h, w = cap.read()[1].shape[:2]
+    for idx in range(6):
+        cam, motivo, nome = _abrir_indice(idx, largura, altura, exigente=True)
+        if cam is not None:
+            if avisar:
+                for linha in pulei:
+                    print(linha)
+                w, h = cam.resolucao
                 print(f"Camera {idx} aberta via {nome} ({w}x{h})")
-                return cap
-            relatorio.append(f"  camera {idx} via {nome}: {motivo}")
-            if motivo == "so imagem preta" and reserva is None:
-                reserva = (idx, backend, nome)
-            if motivo != "nao abriu":
-                break                          # indice existe; nao repete backends
+                if pulei:
+                    print("  (para usar outra: tecla C na janela, ou --camera N)")
+            return cam
+        relatorio.append(f"  camera {idx}" + (f" via {nome}" if nome else "") + f": {motivo}")
+        if motivo == "imagem parada":
+            pulei.append(f"  camera {idx} ({nome}): imagem parada, parece camera virtual (OBS...) - pulada")
+        elif motivo == "so imagem preta":
+            pulei.append(f"  camera {idx} ({nome}): so imagem preta - pulada")
+        elif motivo == "nao entregou imagem":
+            pulei.append(f"  camera {idx} ({nome}): nao entregou imagem (em uso por outro programa?)")
+        if motivo in ("imagem parada", "so imagem preta") and reserva is None:
+            reserva = idx
 
-    print("Nenhuma camera entregou imagem:")
-    print("\n".join(relatorio))
-    print("Dicas: feche programas que usam a webcam (Teams, Discord, navegador, OBS,\n"
-          "NVIDIA Broadcast) ou abra o NVIDIA Broadcast com a webcam como fonte.")
+    if avisar:
+        print("Nenhuma camera com imagem viva:")
+        print("\n".join(relatorio))
+        print(_DICAS_CAMERA)
     if reserva is not None:
-        idx, backend, nome = reserva
-        print(f"Abrindo mesmo assim a camera {idx} ({nome}), que esta mandando imagem preta.")
-        cap = cv2.VideoCapture(idx, backend)
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        return cap
+        if avisar:
+            print(f"Abrindo mesmo assim a camera {reserva}; na janela, a tecla C troca de camera.")
+        return abrir_camera(largura, altura, indice=reserva, avisar=avisar)
     return None
+
+
+def trocar_camera(atual, largura: int = 1280, altura: int = 720, n_max: int = 6):
+    """Tecla C: fecha a camera atual e abre a proxima (indice +1, +2, ...,
+    voltando ao 0). Pula as que nao entregam imagem; as de imagem preta ou
+    parada entram (quem esta trocando ve e aperta C de novo). Devolve a nova
+    Camera, ou None se nenhuma abrir (nem a atual)."""
+    import time
+    idx0 = getattr(atual, "indice", 0)
+    try:
+        atual.release()
+    except Exception:  # noqa: BLE001
+        pass
+    depois = list(range(idx0 + 1, n_max))
+    antes = list(range(0, idx0))
+    for grupo in (depois, antes):
+        for idx in grupo:
+            cam, motivo, _ = _abrir_indice(idx, largura, altura, exigente=False)
+            if cam is not None:
+                return cam
+            if motivo == "nao abriu" and grupo is depois:
+                break                          # os indices sao seguidos: acabou a lista
+    for tentativa in range(3):                 # nenhuma outra: volta para a mesma camera
+        cam, _, _ = _abrir_indice(idx0, largura, altura, exigente=False)
+        if cam is not None:
+            return cam
+        time.sleep(0.5)                        # o Windows pode demorar a soltar a camera
+    return None
+
+
+class MonitorImagem:
+    """Avisa quando a imagem da camera fica PARADA (identica quadro a quadro:
+    camera virtual mostrando uma tela fixa) ou PRETA por mais de `segundos`.
+    update() devolve "", "parada" ou "preta"."""
+
+    def __init__(self, segundos: float = 1.5) -> None:
+        self.segundos = segundos
+        self.reset()
+
+    def reset(self) -> None:
+        self.ref = None
+        self.t_viva: Optional[float] = None
+
+    def update(self, quadro, t: float) -> str:
+        peq = quadro[::8, ::8]
+        preta = float(peq.mean()) <= 8.0
+        igual = (self.ref is not None and peq.shape == self.ref.shape
+                 and np.array_equal(peq, self.ref))
+        self.ref = peq.copy()
+        if self.t_viva is None or not (preta or igual):
+            self.t_viva = t
+            return ""
+        if t - self.t_viva < self.segundos:
+            return ""
+        return "preta" if preta else "parada"
 
 
 class LeitorCamera:
@@ -669,3 +1151,126 @@ class LeitorCamera:
             if self.falhas >= self.max_falhas:
                 return False, None
             time.sleep(0.02)
+
+
+# ============================================================ PALAVRAS v3
+class SignSegmenterV3(SignSegmenter):
+    """Mesmo segmentador (mesmos tempos e limites), mas para quadros com ate
+    DUAS maos e a pose: o sinal comeca quando alguma mao aparece, a velocidade e
+    a da mao que mais se move e o que sai e o pacote cru do sinal
+    {"maos" (T,2,21,3), "lado" (T,2), "pose" (T,33,4)} para o WordRecognizerV3."""
+
+    def reset(self) -> None:
+        super().reset()
+        from libres_v3 import RastreadorMaos
+        self._rast = RastreadorMaos()
+        self._vels = [_VelocidadeSuave(), _VelocidadeSuave()]
+        self._tams = [_TamanhoMao(), _TamanhoMao()]
+        self.qbuf: list = []
+
+    def _emit(self):
+        quadros, self.qbuf = self.qbuf, []
+        tempos = list(self.tbuf)
+        seq = super()._emit()          # aplica os mesmos limites de duracao/quadros
+        if seq is None or not quadros:
+            return None
+        n = len(seq)                   # o buffer pode ter sido cortado (cauda parada)
+        quadros, tempos = quadros[:n], tempos[:n]
+        dt = np.diff(tempos) if len(tempos) >= 2 else np.array([])
+        fps = float(1.0 / np.median(dt)) if len(dt) and np.median(dt) > 0 else 30.0
+        return {"maos": np.stack([q["maos"] for q in quadros]),
+                "lado": np.stack([q["lado"] for q in quadros]),
+                "pose": np.stack([q["pose"] for q in quadros]),
+                "fps": fps}            # fps real da camera (o --recortar mede velocidade por segundo)
+
+    def update(self, quadro: Optional[dict], t: Optional[float] = None):
+        import time as _time
+        t = _time.time() if t is None else float(t)
+        maos = None if quadro is None else np.asarray(quadro["maos"], dtype=np.float64).reshape(2, 21, 3)
+        if maos is None or np.isnan(maos[:, 0, 0]).all():
+            if self._t_mao is not None and t - self._t_mao >= self.gap_time:
+                self._rast.reset()
+                for v in self._vels:
+                    v.reset()
+                for tm in self._tams:
+                    tm.reset()
+            return super().update(None, t)
+
+        lugares = self._rast.update(maos, np.asarray(quadro["lado"]).reshape(2))
+        vel = 0.0
+        for k in range(2):
+            if np.isnan(lugares[k, 0, 0]):
+                self._vels[k].reset()
+                self._tams[k].reset()
+                continue
+            tam = self._tams[k].update(lugares[k])
+            vel = max(vel, self._vels[k].update(lugares[k, 0, :2] / tam, t))
+        # a mao "principal" so serve para o buffer da classe base; quem manda e vel
+        principal = lugares[0] if not np.isnan(lugares[0, 0, 0]) else lugares[1]
+        self._quadro_atual = {"maos": np.asarray(quadro["maos"], dtype=np.float32).reshape(2, 21, 3),
+                              "lado": np.asarray(quadro["lado"]).reshape(2),
+                              "pose": np.asarray(quadro["pose"], dtype=np.float32).reshape(33, 4)}
+        return self._passo(principal.reshape(-1), vel, t)
+
+    def _passo(self, lm: np.ndarray, vel: float, t: float):
+        """A maquina de estados do SignSegmenter.update, com a velocidade ja medida."""
+        self._t_mao = t
+        dt = min(max(t - self._t_last, 1 / 120), 0.5) if self._t_last is not None else 0.0
+        desloc = vel * dt
+        self._last, self._t_last = lm, t
+        if self.waiting:
+            if vel < self.rearm_speed:
+                return None
+            self.waiting = False
+        self.buf.append(lm)
+        self.tbuf.append(t)
+        self.qbuf.append(self._quadro_atual)
+        self.path += desloc
+        if vel < self.still_speed:
+            if self.still_since is None:
+                self.still_since = t
+        else:
+            self.still_since = None
+        parado = self.still_since is not None and t - self.still_since >= self.still_time
+        if t - self.tbuf[0] >= self.max_duration:
+            self.waiting = True
+            return self._emit()
+        if parado and self.path < self.min_motion:
+            self.buf, self.tbuf, self.qbuf = self.buf[-1:], self.tbuf[-1:], self.qbuf[-1:]
+            self.path = 0.0
+            self.still_since = t
+            return None
+        if parado:
+            corte = next((i for i, ti in enumerate(self.tbuf) if ti >= self.still_since + self.cauda_parada),
+                         len(self.tbuf))
+            corte = max(corte, 1)
+            self.buf, self.tbuf, self.qbuf = self.buf[:corte], self.tbuf[:corte], self.qbuf[:corte]
+            self.waiting = True
+            return self._emit()
+        return None
+
+
+class WordRecognizerV3:
+    """Modelo de palavras v3 (modelo_palavras_v3.pkl)."""
+
+    def __init__(self, model_path: Path) -> None:
+        from libres_v3 import FEATURE_VERSION_V3
+        data = carregar_modelo(model_path)
+        if data.get("feature_version") != FEATURE_VERSION_V3:
+            raise RuntimeError(f"{model_path.name} nao e um modelo v3. Rode `python treino_v3.py`.")
+        self.model, self.scaler, self.le = data["model"], data["scaler"], data["label_encoder"]
+        self.classes = list(self.le.classes_)
+        self.versao = 3
+        self.recortar = bool(data.get("recortar", False))     # o mesmo preparo do treino
+        self.sem_mao_parada = bool(data.get("sem_mao_parada", False))
+
+    def predict(self, sinal: dict, aspecto: float, top_k: int = 3) -> list[tuple[str, float]]:
+        from libres_v3 import features_v3, preparar
+        fps = float(sinal.get("fps", 30.0))
+        seq = preparar(sinal["maos"], sinal["lado"], sinal["pose"], aspecto, recortar_repouso=self.recortar,
+                       sem_mao_parada=self.sem_mao_parada, fps=fps if 5.0 <= fps <= 120.0 else 30.0)
+        if seq is None:
+            return []
+        proba = self.model.predict_proba(self.scaler.transform(features_v3(seq).reshape(1, -1)))[0]
+        order = np.argsort(proba)[::-1][:top_k]
+        return [(str(self.le.inverse_transform([i])[0]), float(proba[i])) for i in order]

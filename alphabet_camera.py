@@ -15,7 +15,7 @@ Teclas:
                 coleta_alfabeto/<LETRA>/ como .npy
 """
 
-import pickle, sys, time
+import sys, time
 from pathlib import Path
 from collections import deque
 
@@ -24,6 +24,7 @@ import numpy as np
 import mediapipe as mp
 
 from libres_features import FEAT_DIM, N_LANDMARKS, N_COORDS, normalize_landmarks
+from libres_modelos import carregar_modelo
 
 PROJECT_DIR = Path(__file__).parent
 MODEL_PATH = PROJECT_DIR / "modelo_alfabeto.pkl"
@@ -40,8 +41,7 @@ print("=" * 50)
 print("ALFABETO EM TEMPO REAL + COLETA")
 print("=" * 50)
 
-with open(MODEL_PATH, "rb") as f:
-    data = pickle.load(f)
+data = carregar_modelo(MODEL_PATH)
 model, scaler = data["model"], data["scaler"]
 
 BaseOptions = mp.tasks.BaseOptions

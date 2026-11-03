@@ -11,7 +11,6 @@ da mao e treina um classificador simples.
 Uso: python3 train_alfabeto.py
 """
 
-import pickle
 import numpy as np
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import accuracy_score, classification_report
 
+from libres_modelos import salvar_modelo
 from libres_features import (N_LANDMARKS, N_COORDS, FEAT_DIM, normalize_landmarks,
                              alphabet_features, ALPHABET_FEATURE_VERSION)
 
@@ -226,10 +226,8 @@ def main() -> None:
     Xall, yall = preparar_treino(X, y, rng)
     scaler = StandardScaler().fit(Xall)
     model = novo_modelo().fit(scaler.transform(Xall), yall)
-    with open(OUTPUT_MODEL, "wb") as f:
-        pickle.dump({"model": model, "scaler": scaler,
-                     "letters": sorted(np.unique(y).tolist()),
-                     "feature_version": ALPHABET_FEATURE_VERSION}, f)
+    salvar_modelo({"model": model, "scaler": scaler, "letters": sorted(np.unique(y).tolist()),
+                   "feature_version": ALPHABET_FEATURE_VERSION}, OUTPUT_MODEL)   # comprimido (cabe no GitHub)
     print(f"Modelo salvo em: {OUTPUT_MODEL}  ({len(np.unique(y))} letras)")
 
 

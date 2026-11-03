@@ -339,10 +339,27 @@ def eh_y(raw: np.ndarray) -> bool:
             and dobrado("indicador") and dobrado("medio") and dobrado("anelar"))
 
 
+def indicador_gancho(raw: np.ndarray, g: dict | None = None) -> bool:
+    """Indicador curvado em gancho (X da Libras): a primeira falange do
+    indicador segue a mao, a ponta dobra, e medio, anelar e minimo estao
+    fechados. Distingue do punho fechado (A, S, E) porque ali as articulacoes
+    do indicador ficam na mesma altura das do medio. Nos datasets dispara em
+    36 de 5.622 poses (A e S); em ganchos simulados a partir de L, G e X, em
+    60% a 90%."""
+    g = g or geometria_mao(raw)
+    a, e = g["angulos"], g["esticado"]
+    if e["indicador"] or any(a[d][0] >= 110 for d in ("medio", "anelar", "minimo")):
+        return False
+    r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+    r = (r - r[0]) / max(float(np.linalg.norm(r[9] - r[0])), 1e-9)
+    d = lambda k: float(np.linalg.norm(r[k]))
+    return 50 < a["indicador"][0] < 160 and d(6) > d(10) * 1.12 and d(7) > d(11) * 1.2
+
+
 def forma_mao(raw: np.ndarray) -> str | None:
     """Configuracoes simples e bem definidas (None = deixa para o modelo):
     'Y', 'I' (so o minimo), 'U'/'R'/'V'/'DOIS' (indicador + medio),
-    'INDICADOR' (so o indicador)."""
+    'INDICADOR' (so o indicador), 'GANCHO' (indicador curvado, o X)."""
     if eh_y(raw):
         return "Y"
     g = geometria_mao(raw)
@@ -354,4 +371,16 @@ def forma_mao(raw: np.ndarray) -> str | None:
         return letra_urv(raw) or "DOIS"
     if i and not (m or a or mi):
         return "INDICADOR"
+    if indicador_gancho(raw, g):
+        return "GANCHO"
     return None
+
+
+def familia_forma(forma: str | None) -> str | None:
+    """Agrupa formas que valem como a mesma num gesto: U/R/V/DOIS -> DOIS
+    (H e K); INDICADOR/GANCHO -> IND (Z e X)."""
+    if forma in ("U", "R", "V", "DOIS"):
+        return "DOIS"
+    if forma in ("INDICADOR", "GANCHO"):
+        return "IND"
+    return forma

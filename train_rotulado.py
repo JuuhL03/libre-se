@@ -4,7 +4,7 @@ Treino XGBoost com landmarks normalizados, features angulares
 e divisao treino/teste antes da augmentacao (sem vazamento de dados).
 """
 
-import sys, os, re, pickle, random
+import sys, os, re, random
 from typing import Optional
 import numpy as np
 from pathlib import Path
@@ -18,6 +18,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import accuracy_score, classification_report
 import xgboost as xgb
 
+from libres_modelos import salvar_modelo
 from libres_features import (N_FRAMES, N_LANDMARKS, N_COORDS, FEAT_DIM,
                               SEQ_DIM, FEATURE_VERSION, X_COLS,
                               normalize_landmarks, normalize_sequence,
@@ -552,8 +553,7 @@ def main() -> None:
         'seq_dim': SEQ_DIM,
         'feature_version': FEATURE_VERSION,
     }
-    with open(OUTPUT_MODEL, 'wb') as f:
-        pickle.dump(data, f)
+    salvar_modelo(data, OUTPUT_MODEL)
 
     print(f"\nModelo salvo em: {OUTPUT_MODEL}")
     print(f"Classes: {list(le.classes_)}")

@@ -10,6 +10,11 @@ Uso:
   python reproduzir_trecho.py debug/trecho_20261024_153012.npz --quadros
   python reproduzir_trecho.py debug/trecho_20261024_153012.npz --modo PALAVRAS
 
+Trechos salvos no modo PALAVRAS com o modelo v3 (duas maos + corpo) sao
+reproduzidos com o v3 (se modelo_palavras_v3.pkl existir). Trechos do modo
+CALIBRADO usam a calibracao da pessoa (calibracao/<usuario>/):
+  python reproduzir_trecho.py debug/trecho_....npz --usuario julia
+
 Saida (modo ALFABETO), um bloco por trecho de comportamento igual:
    0.00-0.47s  sem mao
    0.47-1.20s  parada     U 88%  forma=U  sep=+0.12
@@ -23,28 +28,32 @@ from pathlib import Path
 import numpy as np
 
 from libres_features import FEAT_DIM, eh_y, forma_mao, separacao_pontas
-from libres_realtime import (LetterRecognizer, MovimentoMao, SignSegmenter, Soletrador,
-                             WordRecognizer, accept_word)
+from libres_realtime import (LetterRecognizer, MovimentoMao, SignSegmenter, SignSegmenterV3,
+                             Soletrador, WordRecognizer, WordRecognizerV3, accept_word, isotropico)
 
 PROJECT_DIR = Path(__file__).parent
 
 
-def carregar(caminho: Path) -> tuple[np.ndarray, np.ndarray, str, str]:
+def carregar(caminho: Path) -> tuple[np.ndarray, np.ndarray, str, str, dict]:
     d = np.load(caminho, allow_pickle=False)
     t = d["t"].astype(np.float64)
     lm = d["lm"].astype(np.float64)
     if lm.ndim != 2 or lm.shape[1] != FEAT_DIM:
         raise SystemExit(f"{caminho.name}: formato inesperado {lm.shape}")
-    return t - t[0], lm, str(d["modo"]), str(d["texto"])
+    # trechos antigos nao tem o aspecto: a camera abre em 1280x720
+    extras = {"aspecto": float(d["aspecto"]) if "aspecto" in d.files else 16 / 9}
+    if "maos" in d.files:
+        extras.update(maos=d["maos"].astype(np.float64), lado=d["lado"], pose=d["pose"].astype(np.float64))
+    return t - t[0], lm, str(d["modo"]), str(d["texto"]), extras
 
 
-def rodar_alfabeto(t: np.ndarray, lm: np.ndarray, por_quadro: bool) -> str:
+def rodar_alfabeto(t: np.ndarray, lm: np.ndarray, por_quadro: bool, aspecto: float = 16 / 9) -> str:
     try:
         rec = LetterRecognizer(PROJECT_DIR / "modelo_alfabeto.pkl")
     except Exception as e:  # noqa: BLE001
         print(f"  [erro] modelo do alfabeto: {e}")
         return ""
-    sol = Soletrador(rec)
+    sol = Soletrador(rec, aspecto=aspecto)
     vel = MovimentoMao()
     txt: list[str] = []
     bloco = None                       # [chave, t0, t1, n, confs, seps, vmax]
@@ -66,7 +75,7 @@ def rodar_alfabeto(t: np.ndarray, lm: np.ndarray, por_quadro: bool) -> str:
     for ti, raw in zip(t, lm):
         tem = not np.isnan(raw).any()
         info = sol.update(raw if tem else None, ti)
-        v = vel.update(raw if tem else None, ti)
+        v = vel.update(isotropico(raw, aspecto) if tem else None, ti)
         if tem:
             forma = forma_mao(raw) or "-"
             sep = separacao_pontas(raw)
@@ -104,6 +113,13 @@ def rodar_alfabeto(t: np.ndarray, lm: np.ndarray, por_quadro: bool) -> str:
             print(f"    >> {ti:5.2f}s  {msg}")
     if not por_quadro:
         fechar(bloco)
+    fim = sol.finalizar(float(t[-1]) + 0.05 if len(t) else 0.0)
+    if fim["acao"]:
+        if fim["acao"] == "troca" and txt:
+            txt[-1] = fim["letra"]
+        else:
+            txt.append(fim["letra"])
+        print(f"    >> fim do trecho: entrou {fim['letra']} (gesto que ainda estava aberto)")
     return "".join(txt)
 
 
@@ -137,16 +153,83 @@ def rodar_palavras(t: np.ndarray, lm: np.ndarray) -> str:
     return " ".join(saida)
 
 
+def rodar_palavras_v3(t: np.ndarray, extras: dict) -> str:
+    try:
+        words = WordRecognizerV3(PROJECT_DIR / "modelo_palavras_v3.pkl")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [erro] modelo de palavras v3: {e}")
+        return ""
+    seg = SignSegmenterV3()
+    saida: list[str] = []
+    gravando_desde = None
+    for k, ti in enumerate(t):
+        maos = extras["maos"][k]
+        tem = not np.isnan(maos[:, 0, 0]).all()
+        quadro = {"maos": maos, "lado": extras["lado"][k], "pose": extras["pose"][k]} if tem else None
+        sinal = seg.update(quadro, ti)
+        if seg.recording and gravando_desde is None:
+            gravando_desde = ti
+        if sinal is not None:
+            top = words.predict(sinal, extras["aspecto"])
+            ok = accept_word(top)
+            duas = int((~np.isnan(sinal["maos"][:, :, 0, 0])).all(axis=1).sum())
+            resumo = ", ".join(f"{p} {c*100:.0f}%" for p, c in top)
+            ini = f"{gravando_desde:5.2f}" if gravando_desde is not None else "  ?  "
+            print(f"  sinal {ini}-{ti:5.2f}s ({len(sinal['maos'])} quadros, {duas} com as duas maos): "
+                  f"{resumo}  -> {'ENTROU ' + ok.upper() if ok else 'incerto (nao entra)'}")
+            if ok:
+                saida.append(ok.upper())
+        if not seg.recording:
+            gravando_desde = None
+    if seg.recording:
+        print("  (o trecho acabou com um sinal ainda sendo gravado: abaixe a mao no fim)")
+    return " ".join(saida)
+
+
+def rodar_calibrado(t: np.ndarray, extras: dict, usuario: str, vocab: Path) -> str:
+    from calibracao import Calibracao, segmentador_calibrado
+    rec = Calibracao(usuario, vocab).reconhecedor()
+    if rec is None:
+        print(f"  [erro] sem calibracao em calibracao/{usuario}/")
+        return ""
+    seg = segmentador_calibrado()
+    saida: list[str] = []
+    gravando_desde = None
+    for k, ti in enumerate(t):
+        maos = extras["maos"][k]
+        tem = not np.isnan(maos[:, 0, 0]).all()
+        quadro = {"maos": maos, "lado": extras["lado"][k], "pose": extras["pose"][k]} if tem else None
+        sinal = seg.update(quadro, ti)
+        if seg.recording and gravando_desde is None:
+            gravando_desde = ti
+        if sinal is not None:
+            r = rec.predict(sinal, extras["aspecto"])
+            resumo = ", ".join(f"{p} {c*100:.0f}%" for p, c in r["top"])
+            ini = f"{gravando_desde:5.2f}" if gravando_desde is not None else "  ?  "
+            print(f"  sinal {ini}-{ti:5.2f}s ({len(sinal['maos'])} quadros): {resumo}  distancia/limite "
+                  f"{r['razao']:.2f} -> {'ENTROU ' + r['aceito'].upper() if r['aceito'] else 'NAO RECONHECIDO'}")
+            if r["aceito"]:
+                saida.append(r["aceito"].upper())
+        if not seg.recording:
+            gravando_desde = None
+    if seg.recording:
+        print("  (o trecho acabou com um sinal ainda sendo gravado: abaixe a mao no fim)")
+    return " ".join(saida)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("arquivos", nargs="+", help="arquivos .npz salvos com a tecla S")
-    ap.add_argument("--modo", choices=["ALFABETO", "PALAVRAS"], help="padrao: o modo em que foi salvo")
+    ap.add_argument("--modo", choices=["ALFABETO", "PALAVRAS", "CALIBRADO"],
+                    help="padrao: o modo em que foi salvo")
+    ap.add_argument("--usuario", default="padrao", help="calibracao usada no modo CALIBRADO")
+    ap.add_argument("--vocabulario", default=str(PROJECT_DIR / "vocabulario.txt"))
     ap.add_argument("--quadros", action="store_true", help="mostra todos os quadros (alfabeto)")
     args = ap.parse_args()
 
     for arq in args.arquivos:
         caminho = Path(arq)
-        t, lm, modo, texto_app = carregar(caminho)
+        t, lm, modo, texto_app, extras = carregar(caminho)
         modo = args.modo or modo
         com_mao = int((~np.isnan(lm).any(axis=1)).sum())
         fps = (len(t) - 1) / t[-1] if t[-1] > 0 else 0.0
@@ -155,7 +238,11 @@ def main() -> None:
         if texto_app:
             print(f"   texto na tela quando salvou: {texto_app}")
         if modo == "ALFABETO":
-            final = rodar_alfabeto(t, lm, args.quadros)
+            final = rodar_alfabeto(t, lm, args.quadros, extras["aspecto"])
+        elif modo == "CALIBRADO" and "maos" in extras:
+            final = rodar_calibrado(t, extras, args.usuario, Path(args.vocabulario))
+        elif "maos" in extras and (PROJECT_DIR / "modelo_palavras_v3.pkl").exists():
+            final = rodar_palavras_v3(t, extras)
         else:
             final = rodar_palavras(t, lm)
         print(f"   reconhecido neste trecho: {final or '(nada)'}")

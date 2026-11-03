@@ -1,0 +1,21 @@
+# Vocabulario da calibracao: uma palavra ou expressao por linha.
+# Pode mudar a vontade; depois, no app (modo CALIBRADO), calibre as novas.
+oi
+bom dia
+boa tarde
+boa noite
+prazer
+obrigado
+tchau
+por favor
+pão
+café
+leite
+quanto custa
+1
+2
+3
+4
+5
+sim
+não

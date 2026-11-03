@@ -48,6 +48,9 @@ ap.add_argument("--pessoa", type=int, required=True, help="numero fixo de quem e
 ap.add_argument("--letras", type=str, default="".join(LETRAS_PADRAO),
                 help="letras a coletar, ex.: A,B,C (padrao: A a Z)")
 ap.add_argument("--takes", type=int, default=3, help="takes por letra (padrao 3)")
+ap.add_argument("--camera", type=int, default=None, metavar="N",
+                help="numero da camera (0, 1, 2...); sem isso, escolhe sozinho e pula "
+                     "cameras de imagem preta ou parada (OBS...)")
 args = ap.parse_args()
 
 letras = [c.strip().upper() for c in args.letras.replace(",", "") if c.strip()]
@@ -77,9 +80,10 @@ landmarker = mp.tasks.vision.HandLandmarker.create_from_options(
         min_tracking_confidence=0.5,
     ))
 
-cap = abrir_camera()
+cap = abrir_camera(indice=args.camera)
 if cap is None:
-    sys.exit("Nao foi possivel ler a camera. Feche outros apps que usam a webcam.")
+    sys.exit("Nao foi possivel ler a camera. Feche outros apps que usam a webcam "
+             "ou escolha outra: --camera 1")
 leitor = LeitorCamera(cap)
 
 idx = 0
