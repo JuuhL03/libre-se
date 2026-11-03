@@ -48,7 +48,7 @@ const ui = {
   fps: $("#fps"), conexao: $("#conexao"), perfil: $("#perfil"), modos: $("#modos"),
   texto: $("#texto"), entrou: $("#entrou"), agora: $("#agora"), lista: $("#lista"),
   historico: $("#historico ol"), aviso: $("#aviso"), acoes: $("#acoes"),
-  dlgPerfil: $("#dlg-perfil"), campoUsuario: $("#campo-usuario"), blocoCodigo: $("#bloco-codigo"),
+  dlgLuz: $("#dlg-luz"), dlgPerfil: $("#dlg-perfil"), campoUsuario: $("#campo-usuario"), blocoCodigo: $("#bloco-codigo"),
   campoCodigo: $("#campo-codigo"), dlgVocab: $("#dlg-vocab"), campoVocab: $("#campo-vocab"),
 };
 
@@ -253,6 +253,9 @@ async function usarStream(stream) {
   S.camNome = trilha ? trilha.label : "";
   S.tQuadro = performance.now();
   S.mon = novoMonitor();
+  S.luzInicial = trilha && trilha.getSettings ? trilha.getSettings() : {};
+  const luz = ler("libres.luz." + (S.camAtual || ""));
+  if (luz !== "") aplicarLuz(Number(luz)).catch(() => {});
   problemaImagem("");
   agendarQuadro();
   await listarCameras();
@@ -361,11 +364,19 @@ function monitorar() {
   m.ctx.drawImage(S.det, 0, 0, m.c.width, m.c.height);
   const d = m.ctx.getImageData(0, 0, m.c.width, m.c.height).data;
   const g = new Uint8Array(d.length / 4);
-  let soma = 0, igual = !!m.ant;
+  let soma = 0, igual = !!m.ant, brancos = 0;
   for (let i = 0, j = 0; i < d.length; i += 4, j++) {
     g[j] = (d[i] + d[i + 1] + d[i + 2]) / 3; soma += g[j];
+    if (g[j] >= 245) brancos++;
     if (igual && m.ant[j] !== g[j]) igual = false;
   }
+  m.estourada = brancos / g.length;                // parte da imagem branca demais (sem contorno)
+  m.clara = m.estourada > 0.25 ? (m.clara || 0) + 1 : 0;
+  if (m.clara >= 5 && (S.avisoLuz == null || agora - S.avisoLuz > 60000) && !ui.dlgLuz.open) {
+    S.avisoLuz = agora;
+    aviso("Imagem muito clara: a mão pode sumir. Escureça em Mais → Luz da câmera (tecla L).", true, 9000);
+  }
+  if (ui.dlgLuz.open) mostrarMedidaLuz();
   m.ant = g;
   m.parada = igual ? m.parada + 1 : 0;              // camera de verdade sempre tem ruido: nunca sai identica
   m.preta = soma / g.length < 12 ? m.preta + 1 : 0;
@@ -813,6 +824,18 @@ ui.acoes.addEventListener("click", (ev) => {
   if (b) comando(b.dataset.cmd);
 });
 $("#btn-camera").addEventListener("click", () => escolherCamera());
+$("#btn-luz").addEventListener("click", abrirLuz);
+$("#luz-valor").addEventListener("input", async (ev) => {
+  const v = Number(ev.target.value);
+  await aplicarLuz(v);
+  gravar("libres.luz." + (S.camAtual || ""), String(v));
+  mostrarLuz();
+});
+$("#luz-auto").addEventListener("click", async () => {
+  await aplicarLuz(null);
+  try { localStorage.removeItem("libres.luz." + (S.camAtual || "")); } catch { /* sem armazenamento */ }
+  mostrarLuz();
+});
 // depois de clicar, o botao perde o foco: o ESPACO do teclado nao "clica" nele de novo
 document.addEventListener("click", (ev) => {
   const b = ev.target.closest && ev.target.closest("button");
@@ -846,6 +869,70 @@ btnMais.addEventListener("click", (ev) => { ev.stopPropagation(); menu(menuMais.
 menuMais.addEventListener("click", () => menu(false));
 document.addEventListener("click", (ev) => { if (!menuMais.hidden && !ev.target.closest("#menu-mais")) menu(false); });
 
+// ------------------------------------------------------------------ luz (exposicao) da camera
+// Filtro na imagem nao devolve o contorno da parte que estourou (testado com 283 fotos de maos:
+// gama, CLAHE e contraste PIORAM a deteccao). O ajuste tem que ser no sensor, antes da imagem:
+// exposureCompensation; sem ele, exposureTime (manual) ou brightness.
+const trilhaVideo = () => S.stream && S.stream.getVideoTracks()[0];
+function capacidadeLuz() {
+  const t = trilhaVideo();
+  if (!t || !t.getCapabilities) return null;
+  const c = t.getCapabilities(), faixa = (r) => ({ min: r.min, max: r.max, step: r.step || (r.max - r.min) / 20 });
+  const ok = (r) => r && typeof r.min === "number" && r.max > r.min;
+  if (ok(c.exposureCompensation)) return { tipo: "compensacao", ...faixa(c.exposureCompensation) };
+  if (ok(c.exposureTime) && (c.exposureMode || []).includes("manual")) return { tipo: "tempo", ...faixa(c.exposureTime) };
+  if (ok(c.brightness)) return { tipo: "brilho", ...faixa(c.brightness) };
+  return null;
+}
+async function aplicarLuz(valor) {                    // valor null = automatica
+  const t = trilhaVideo(), cap = capacidadeLuz();
+  if (!t || !cap) return false;
+  const ini = S.luzInicial || {};
+  let c;
+  if (cap.tipo === "compensacao") c = { exposureMode: "continuous", exposureCompensation: valor == null ? 0 : valor };
+  else if (cap.tipo === "tempo") c = valor == null ? { exposureMode: "continuous" } : { exposureMode: "manual", exposureTime: valor };
+  else c = { brightness: valor == null ? (ini.brightness ?? (cap.min + cap.max) / 2) : valor };
+  const v = valor == null ? null : Math.min(cap.max, Math.max(cap.min, valor));
+  if (v != null) c[cap.tipo === "compensacao" ? "exposureCompensation" : cap.tipo === "tempo" ? "exposureTime" : "brightness"] = v;
+  try { await t.applyConstraints({ advanced: [c] }); S.luz = v; return true; }
+  catch (e) { console.warn("luz da camera:", e); return false; }
+}
+function mostrarMedidaLuz() {
+  const m = S.mon;
+  $("#luz-medida").textContent = m && m.estourada != null
+    ? `Parte da imagem estourada (branca): ${Math.round(m.estourada * 100)}%` +
+      (m.estourada > 0.25 ? " — escureça mais." : m.estourada > 0.1 ? " — ainda um pouco clara." : " — bom.")
+    : "";
+}
+function mostrarLuz() {
+  const cap = capacidadeLuz(), t = trilhaVideo(), s = t && t.getSettings ? t.getSettings() : {};
+  const atual = cap ? (cap.tipo === "compensacao" ? s.exposureCompensation : cap.tipo === "tempo" ? s.exposureTime : s.brightness) : null;
+  $("#luz-texto").textContent = S.luz == null ? "automática" : cap && cap.tipo === "compensacao"
+    ? `${S.luz > 0 ? "+" : ""}${Number(S.luz).toFixed(1)}` : String(Math.round(S.luz));
+  const r = $("#luz-valor");
+  if (cap && document.activeElement !== r && atual != null) r.value = atual;
+}
+function abrirLuz() {
+  const cap = capacidadeLuz(), r = $("#luz-valor");
+  $("#luz-controle").hidden = !cap;
+  $("#luz-auto").hidden = !cap;
+  if (cap) {
+    r.min = cap.min; r.max = cap.max; r.step = cap.step;
+    $("#luz-dica").dataset.extra = "";
+  } else {
+    $("#luz-medida").textContent = "";
+  }
+  $("#luz-dica").textContent = cap
+    ? "Com muita luz (pele clara, parede branca, lâmpada forte) a mão \"estoura\" e some para o reconhecimento. " +
+      "Diminua até a mão aparecer com contorno: a imagem fica mais escura, mas os dedos voltam a ser achados. " +
+      "Roupa e fundo escuros também ajudam."
+    : "Esta câmera não deixa o navegador mudar a exposição. Ajuste no app da câmera (no Windows, app Câmera → " +
+      "configurações; no celular, toque na tela e arraste o sol para baixo), use roupa ou fundo escuros e evite luz atrás da pessoa.";
+  mostrarLuz();
+  mostrarMedidaLuz();
+  ui.dlgLuz.showModal();
+}
+
 function comoSeFaz() {                               // tecla H: o sinal da vez no dicionario
   const e = S.est || {};
   let url = DICIONARIO_INES;
@@ -861,7 +948,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.target && ["INPUT", "TEXTAREA", "SELECT"].includes(ev.target.tagName)) return;
   const k = ev.key.toLowerCase();
   const mapa = { m: () => comando("modo"), " ": () => comando("limpar"), backspace: () => comando("apagar"),
-    c: trocarCamera, f: telaCheia, h: comoSeFaz };
+    c: trocarCamera, f: telaCheia, h: comoSeFaz, l: abrirLuz };
   if (mapa[k]) { ev.preventDefault(); mapa[k](); return; }
   if (S.modo === "CALIBRADO" && "kvnprd".includes(k) && k.length === 1) { ev.preventDefault(); comando(k); }
 });

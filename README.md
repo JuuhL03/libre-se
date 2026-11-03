@@ -126,6 +126,8 @@ da luz da sala, e tudo o que entra no texto também vai para `saida_libras.txt`.
 | `S` | salva os últimos 6 s de pontos da mão em `debug/` (sem imagem) |
 | `H` | **como se faz?** abre no navegador o vídeo do sinal num dicionário de Libras: na calibração, a palavra da vez; fora dela, o último sinal; no ALFABETO, o alfabeto manual |
 | `C` | troca de câmera (a próxima: 0, 1, 2... e volta) |
+| `[` / `]` | **luz da câmera**: escurece / clareia (exposição do sensor) |
+| `E` | volta a exposição para o automático |
 | `Q` | sai |
 
 **Qual câmera:** sem opção, o app testa as câmeras e **pula as de imagem preta
@@ -135,6 +137,17 @@ quadros nunca saem idênticos; imagem idêntica por ~1 s é câmera virtual. Par
 escolher uma câmera: `python libras_camera.py --camera 1` (vale também para
 `coletar_palavras.py` e `coletar_alfabeto.py`). Se a imagem ficar parada ou preta
 durante o uso, aparece um aviso na tela: aperte `C`.
+
+**Sala muito clara / pele muito clara:** com a imagem estourada (branca), a mão
+perde o contorno e o MediaPipe deixa de achá-la. Filtros na imagem (gama, CLAHE,
+contraste) **não resolvem**: testamos em 283 fotos de mãos com luz forte simulada e
+a detecção caiu (ex.: 68,9% sem filtro → 43,5% com gama), porque a parte branca já
+não tem informação para recuperar. O que funciona é **a câmera captar menos luz**:
+no app, `[` escurece (e `E` volta ao automático); na página, **Mais → Luz da câmera**
+(tecla `L`). As duas avisam quando a imagem fica clara demais. Só funciona em câmeras
+que deixam mudar a exposição (a maioria das webcams USB e o Chrome no Android);
+nas outras, ajuda: fundo e roupa escuros, luz de frente (não atrás da pessoa) e
+afastar da janela.
 
 ## 🎯 Modo CALIBRADO (palavras do dia a dia)
 

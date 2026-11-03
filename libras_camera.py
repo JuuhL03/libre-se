@@ -73,6 +73,7 @@ from calibracao import (DICIONARIO_ALFABETO, DICIONARIO_INES, PERFIL_REFERENCIA,
                         exemplo_referencia, link_dicionario, segmentador_calibrado, sequencia, slug)
 from libres_features import FEAT_DIM
 from libres_v3 import rastrear
+from libres_realtime import ExposicaoCamera, estourada
 from libres_realtime import (LeitorCamera, LetterRecognizer, MonitorImagem, SignSegmenter,
                              SignSegmenterV3, Soletrador, WordRecognizer, WordRecognizerV3,
                              abrir_camera, accept_word, trocar_camera)
@@ -191,6 +192,8 @@ if cap is None:
              "(Teams, Discord, navegador, OBS) ou escolha outra: python libras_camera.py --camera 1")
 leitor = LeitorCamera(cap)
 monitor = MonitorImagem()       # avisa se a imagem ficar parada (camera virtual) ou preta
+exposicao = ExposicaoCamera(cap) if cap is not None else None   # teclas [ ] E
+clara_desde, aviso_luz_em = None, -1e9
 
 segmenter = SignSegmenterV3() if words_v3 is not None else SignSegmenter()
 texto: list[str] = []          # itens ja reconhecidos (letras e palavras)
@@ -578,7 +581,7 @@ def desenhar_painel(altura: int, info_alfa: dict | None, gravando: bool, agora: 
         cv2.putText(pn, asc(aviso), (x0, altura - 70), FONTE, 0.5, COR_OK, 1)
     cv2.putText(pn, "M modo   ESPACO limpa   BACKSPACE apaga", (x0, altura - 42),
                 FONTE, 0.5, COR_SUAVE, 1)
-    cv2.putText(pn, "S salva trecho   C troca camera   Q sai", (x0, altura - 18),
+    cv2.putText(pn, "S salva trecho   C camera   [ ] luz   Q sai", (x0, altura - 18),
                 FONTE, 0.5, COR_SUAVE, 1)
     return pn
 
@@ -755,7 +758,7 @@ def aviso_camera(img: np.ndarray, estado: str) -> None:
 JANELA = "Libre-se"
 cv2.namedWindow(JANELA, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
 janela_ajustada = False         # tamanho inicial da janela, feito no 1o quadro
-print("\nM = modo | ESPACO = limpar | BACKSPACE = apagar | S = salvar trecho | "
+print("\nM = modo | ESPACO = limpar | BACKSPACE = apagar | S = salvar trecho | [ ] = luz da camera (E = auto) | "
       "C = trocar camera | Q = sair")
 print("Modo CALIBRADO: K = calibrar | V = ver exemplo | N/P = proxima/anterior | R = refaz a palavra "
       "| D = desfaz | H = como se faz (dicionario)")
@@ -768,6 +771,14 @@ while True:
     t = time.time()
     frame = cv2.flip(frame, 1)
     estado_img = monitor.update(frame, t)      # "", "parada" ou "preta"
+    if estourada(frame) > 0.25:                # imagem muito clara: a mao some (pele clara, parede branca)
+        clara_desde = t if clara_desde is None else clara_desde
+        if t - clara_desde > 2 and t - aviso_luz_em > 60:
+            aviso_luz_em = t
+            aviso, aviso_ate = "imagem muito clara: [ escurece a camera", t + 8
+            print("  imagem muito clara (a mao pode sumir): aperte [ para escurecer a camera, ] clareia, E automatico")
+    else:
+        clara_desde = None
     h, w = frame.shape[:2]
     aspecto_cam = w / h
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -1003,6 +1014,7 @@ while True:
             print("  nenhuma camera abriu (nem a anterior)")
             break
         cap, leitor = novo, LeitorCamera(novo)
+        exposicao = ExposicaoCamera(cap)
         monitor.reset()
         segmenter.reset()
         seg_cal.reset()
@@ -1018,6 +1030,12 @@ while True:
             print(f"  camera {idx} ({getattr(cap, 'backend', '')}, {lw}x{lh}). Para abrir direto "
                   f"nela: python libras_camera.py --camera {idx}")
             aviso, aviso_ate = f"camera {idx} (para abrir direto: --camera {idx})", time.time() + 5
+    elif tecla in ("[", "]") and exposicao is not None:
+        aviso, aviso_ate = exposicao.ajustar(-1 if tecla == "[" else 1), time.time() + 5
+        print("  " + aviso)
+    elif tecla == "e" and exposicao is not None:
+        aviso, aviso_ate = exposicao.automatico(), time.time() + 4
+        print("  " + aviso)
     elif tecla == "s":
         nome = salvar_trecho()
         if nome:

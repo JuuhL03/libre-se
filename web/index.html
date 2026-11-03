@@ -71,6 +71,7 @@
       </div>
       <div id="menu-mais" hidden>
         <button id="btn-camera">Câmera… <kbd>C</kbd></button>
+        <button id="btn-luz" title="Escurece ou clareia a imagem na própria câmera">Luz da câmera… <kbd>L</kbd></button>
         <button id="btn-tela-cheia">Tela cheia <kbd>F</kbd></button>
         <button id="btn-falar-auto" title="Fala cada palavra quando ela entra no texto">Voz automática: desligada</button>
       </div>
@@ -103,6 +104,24 @@
     <div class="botoes">
       <button value="cancelar">Cancelar</button>
       <button value="usar" class="principal">Usar esta câmera</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-luz">
+  <form method="dialog">
+    <h2>Luz da câmera</h2>
+    <p id="luz-dica">Com muita luz (pele clara, parede branca, lâmpada forte) a mão "estoura" e some para o
+      reconhecimento. Diminua a exposição até a mão aparecer com contorno: a imagem fica mais escura, mas os
+      dedos voltam a ser achados. Roupa e fundo escuros também ajudam.</p>
+    <div id="luz-controle">
+      <label for="luz-valor">Exposição: <strong id="luz-texto">automática</strong></label>
+      <div class="luz-linha"><span>mais escura</span><input type="range" id="luz-valor"><span>mais clara</span></div>
+    </div>
+    <p id="luz-medida" class="suave"></p>
+    <div class="botoes">
+      <button type="button" id="luz-auto">Automática</button>
+      <button value="ok" class="principal">Pronto</button>
     </div>
   </form>
 </dialog>
