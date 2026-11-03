@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Libre-se</title>
+<meta name="description" content="Reconhecimento de LIBRAS pela câmera: alfabeto, palavras e sinais calibrados.">
+<meta name="theme-color" content="#1a1c20">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icone.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icone.svg">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+<div id="app">
+  <section id="palco" aria-label="Câmera">
+    <canvas id="tela"></canvas>
+    <div id="carregando">
+      <div class="girando"></div>
+      <div class="titulo" id="carregando-titulo">Carregando…</div>
+      <div class="detalhe" id="carregando-detalhe">Preparando a câmera e o reconhecimento das mãos.</div>
+      <div class="botoes-erro">
+        <button id="escolher-camera" class="principal" hidden>Escolher câmera</button>
+        <button id="tentar" hidden>Tentar de novo</button>
+      </div>
+    </div>
+    <div id="faixa-camera" hidden><span></span><button type="button">Escolher câmera</button></div>
+    <div id="faixa" hidden></div>
+  </section>
+
+  <aside id="painel" aria-label="Painel">
+    <div id="topo">
+      <h1>LIBRE-SE</h1>
+      <button id="perfil" title="Trocar o perfil (cada pessoa calibra o seu)">perfil</button>
+      <div class="info"><span id="fps">– fps</span><br><span id="conexao">conectando…</span></div>
+    </div>
+    <nav id="modos" aria-label="Modo">
+      <button data-modo="ALFABETO">ALFABETO</button>
+      <button data-modo="PALAVRAS">PALAVRAS</button>
+      <button data-modo="CALIBRADO">CALIBRADO</button>
+    </nav>
+    <div id="rolagem">
+      <div class="bloco" id="bloco-texto">
+        <div class="rotulo">Texto</div>
+        <div id="texto" class="vazio">–</div>
+        <div id="entrou"></div>
+      </div>
+      <div class="bloco" id="agora"></div>
+      <div class="bloco" id="lista"></div>
+      <div class="bloco" id="historico">
+        <div class="rotulo">Histórico</div>
+        <ol></ol>
+      </div>
+    </div>
+    <div id="aviso" role="status"></div>
+    <div id="acoes">
+      <div id="acoes-ctx" class="linha" hidden>
+        <button data-cmd="k" class="principal" hidden>Calibrar <kbd>K</kbd></button>
+        <button data-cmd="p" hidden>Anterior <kbd>P</kbd></button>
+        <button data-cmd="n" hidden>Próxima <kbd>N</kbd></button>
+        <button data-cmd="r" hidden>Refazer palavra <kbd>R</kbd></button>
+        <button data-cmd="d" hidden>Desfazer último <kbd>D</kbd></button>
+        <button data-cmd="v" hidden>Ver exemplo <kbd>V</kbd></button>
+        <button id="btn-vocab" hidden>Vocabulário</button>
+      </div>
+      <div id="acoes-base" class="linha">
+        <button data-cmd="apagar">Apagar <kbd>⌫</kbd></button>
+        <button data-cmd="limpar">Limpar <kbd>Espaço</kbd></button>
+        <button id="btn-falar" title="Lê o texto em voz alta (pt-BR)">Falar</button>
+        <button id="btn-mais" aria-expanded="false" aria-controls="menu-mais">Mais ▾</button>
+      </div>
+      <div id="menu-mais" hidden>
+        <button id="btn-camera">Câmera… <kbd>C</kbd></button>
+        <button id="btn-tela-cheia">Tela cheia <kbd>F</kbd></button>
+        <button id="btn-falar-auto" title="Fala cada palavra quando ela entra no texto">Voz automática: desligada</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<dialog id="dlg-perfil">
+  <form method="dialog">
+    <h2>Quem vai sinalizar?</h2>
+    <p>Cada pessoa tem a sua calibração. Use sempre o mesmo nome para reaproveitar os sinais gravados.</p>
+    <label for="campo-usuario">Nome do perfil</label>
+    <input id="campo-usuario" autocomplete="off" maxlength="40" placeholder="ex.: julia" required>
+    <div id="bloco-codigo" hidden>
+      <label for="campo-codigo">Código de acesso</label>
+      <input id="campo-codigo" autocomplete="off" maxlength="80" type="password">
+    </div>
+    <div class="botoes">
+      <button value="ok" class="principal">Entrar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-camera">
+  <form method="dialog">
+    <h2>Qual câmera usar?</h2>
+    <p id="camera-dica">Escolha a webcam de verdade.</p>
+    <label for="sel-camera">Câmera</label>
+    <select id="sel-camera"></select>
+    <div class="botoes">
+      <button value="cancelar">Cancelar</button>
+      <button value="usar" class="principal">Usar esta câmera</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-vocab">
+  <form method="dialog">
+    <h2>Vocabulário do modo calibrado</h2>
+    <p>Uma palavra ou expressão por linha. As palavras novas precisam ser calibradas (o app pede cada uma algumas vezes).</p>
+    <textarea id="campo-vocab" spellcheck="false"></textarea>
+    <div class="botoes">
+      <button value="cancelar">Cancelar</button>
+      <button value="salvar" class="principal">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

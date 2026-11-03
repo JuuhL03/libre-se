@@ -1,0 +1,6 @@
+# Versoes das bibliotecas em que os modelos (.pkl) do repositorio foram salvos.
+# Depois de treinar de novo, rode no .venv do treino:  python servidor/fixar_versoes.py
+# (ele reescreve este arquivo com as versoes exatas daquele .venv).
+numpy>=2.0,<3
+scikit-learn==1.8.0
+xgboost>=2.0,<3

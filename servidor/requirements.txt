@@ -1,0 +1,5 @@
+# Servidor da versao web (servidor/app.py). As versoes de numpy, scikit-learn e
+# xgboost ficam em requirements-modelos.txt: precisam ser as MESMAS do .venv em
+# que os modelos (.pkl) foram treinados -> python servidor/fixar_versoes.py
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1

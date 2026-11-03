@@ -1,0 +1,14 @@
+{
+  "name": "Libre-se",
+  "short_name": "Libre-se",
+  "description": "Reconhecimento de LIBRAS pela câmera: alfabeto, palavras e sinais calibrados.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#121417",
+  "theme_color": "#1a1c20",
+  "icons": [
+    { "src": "icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

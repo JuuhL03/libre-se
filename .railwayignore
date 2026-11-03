@@ -1,0 +1,24 @@
+# fora da imagem: dados de treino, videos, ambientes e coisas locais
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.zip
+*.log
+minds/
+minds_videos/
+minds_v3/
+eqt_videos/
+eqt_v3/
+eqt_landmarks/
+coleta_v3/
+coletados/
+youtube_videos/
+palavras2/
+calibracao/
+dados_web/
+debug/
+saida_libras.txt
+web/vendor/
+servidor/modelos/*.baixando
