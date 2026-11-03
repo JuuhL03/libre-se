@@ -36,3 +36,10 @@ web/vendor/
 servidor/modelos/
 dados_web/
 .venv/
+
+# alfabeto: imagens dos datasets publicos e as poses extraidas (coleta do grupo)
+datasets/
+coleta_alfabeto/
+# saidas locais (diagnosticos, publicar_site.bat)
+diagnostico*.txt
+listagem.txt

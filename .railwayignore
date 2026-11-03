@@ -22,3 +22,8 @@ debug/
 saida_libras.txt
 web/vendor/
 servidor/modelos/*.baixando
+datasets/
+coleta_alfabeto/
+diagnostico*.txt
+listagem.txt
+publicar_site.bat

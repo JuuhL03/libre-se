@@ -93,6 +93,9 @@ railway volume add --mount-path /data             # a calibração não se perde
 railway domain                                    # gera o endereço https://....up.railway.app
 ```
 
+No Windows, `publicar_site.bat` (dois cliques) faz o teste do servidor com os seus
+modelos e, se passar, o `railway up`; os registros ficam em `publicar*.log`.
+
 `railway up` não envia o que está no `.gitignore`/`.railwayignore` (vídeos, dados
 extraídos, `.venv`); o Dockerfile baixa o MediaPipe do navegador e o modelo do corpo.
 Depois de mudar o código ou o modelo, `railway up` de novo. Outra opção é ligar o
@@ -704,6 +707,10 @@ Para cada frame de 21 landmarks (x, y, z), o pipeline calcula:
 
 O primeiro modelo do projeto (XGBoost, 61 classes, uma mão) tinha 45% de acurácia
 no teste com as 20 classes do MINDS.
+
+O `modelo_palavras_v3.pkl` foi treinado com o MINDS-Libras e a LIBRAS-EQT-UECE (esta
+sob CC BY-NC 4.0: uso não comercial, citando a fonte). Os vídeos e os pontos extraídos
+das bases não vão para o repositório.
 
 ## Licença
 
