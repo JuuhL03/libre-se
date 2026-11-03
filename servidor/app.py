@@ -14,6 +14,7 @@ Rodar no computador (para testar):
 Variaveis de ambiente:
   LIBRES_DADOS    pasta da calibracao de cada usuario (no Railway: o volume, ex. /data)
   LIBRES_CODIGO   se definida, a pagina pede este codigo para entrar
+  (pagina com ?pesquisa=1: modo pesquisa do teste com usuarios, anonimo e sem salvar nada)
   LIBRES_SESSOES  maximo de pessoas usando ao mesmo tempo (padrao 12)
 """
 
@@ -81,20 +82,30 @@ async def ciclo(_app):
 app = FastAPI(title="Libre-se web", docs_url=None, redoc_url=None, lifespan=ciclo)
 
 
-async def obter_sessao(sid: str, usuario: str, modo: str | None) -> list:
+def _soltar(sid: str) -> None:
+    g = guardadas.pop(sid, None)
+    if g is not None:
+        g[0].descartar()               # modo pesquisa: apaga os exemplos temporarios
+
+
+async def obter_sessao(sid: str, usuario: str, modo: str | None, pesquisa: bool = False) -> list:
     """A sessao desta pagina: a mesma de antes se ela so caiu e reconectou."""
     agora = time.time()
     for k, (_s, _tr, t) in list(guardadas.items()):
         if agora - t > TEMPO_SESSAO:
-            guardadas.pop(k, None)
+            _soltar(k)
+    if pesquisa:                       # anonimo: o nome vem do id aleatorio da pagina
+        usuario = "pesquisa-" + "".join(c for c in sid if c.isalnum())[:10]
     g = guardadas.get(sid) if sid else None
-    if g is None or g[0].usuario != (usuario or "padrao").strip()[:40]:
-        s = await asyncio.to_thread(Sessao, recursos, usuario, 5, modo)
+    if g is None or g[0].usuario != (usuario or "padrao").strip()[:40] or g[0].efemera != pesquisa:
+        if g is not None:
+            _soltar(sid)
+        s = await asyncio.to_thread(Sessao, recursos, usuario, 5, modo, pesquisa)
         g = [s, threading.Lock(), agora]
         if sid:
             guardadas[sid] = g
             if len(guardadas) > MAX_GUARDADAS:
-                guardadas.pop(min(guardadas, key=lambda k: guardadas[k][2]), None)
+                _soltar(min(guardadas, key=lambda k: guardadas[k][2]))
     g[2] = agora
     return g
 
@@ -154,7 +165,8 @@ async def ws(websocket: WebSocket) -> None:
     sessoes_ativas += 1
     try:
         try:
-            g = await obter_sessao(qp.get("sid", "")[:64], qp.get("usuario", "padrao"), qp.get("modo"))
+            g = await obter_sessao(qp.get("sid", "")[:64], qp.get("usuario", "padrao"), qp.get("modo"),
+                                   qp.get("pesquisa") == "1")
         except Exception as e:  # noqa: BLE001
             await websocket.send_json({"tipo": "erro", "erro": "sessao", "msg": f"nao abriu a sessao: {e}"})
             await websocket.close(code=4003)
@@ -194,6 +206,8 @@ async def ws(websocket: WebSocket) -> None:
         pass
     finally:
         sessoes_ativas -= 1
+        if not qp.get("sid") and "g" in locals():
+            g[0].descartar()           # sessao sem id nao fica guardada: apaga ja
 
 
 # a pagina (por ultimo: as rotas acima tem prioridade)

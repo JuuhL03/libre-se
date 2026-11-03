@@ -106,6 +106,12 @@ sozinho, com os modelos do repositório e as versões de `servidor/requirements-
 Opcional: a variável `LIBRES_CODIGO` (no painel do Railway) faz a página pedir um
 código para entrar. O plano Hobby (US$ 5/mês com US$ 5 de uso) basta.
 
+**Modo pesquisa (teste com usuários do TCC):** o link com `?pesquisa=1`
+(ex.: `https://libre-se-web-production.up.railway.app/?pesquisa=1`) abre a página sem pedir
+nome, mostra o roteiro do teste (alfabeto: L-I-B-R-A-S; calibrar e reconhecer oi, obrigado,
+café, pão e tchau, 3 vezes cada) e **não salva nada** no servidor: os sinais gravados ficam
+numa pasta temporária, apagada quando a sessão expira (20 min sem uso).
+
 **Na apresentação:** calibre no mesmo aparelho, câmera e luz da apresentação; no
 celular, use um suporte (as duas mãos livres); abra a página antes (a 1a carga baixa
 ~25 MB); deixe o app de computador como plano B, porque a versão web depende da

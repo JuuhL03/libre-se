@@ -40,6 +40,7 @@
       <button data-modo="CALIBRADO">CALIBRADO</button>
     </nav>
     <div id="rolagem">
+      <div class="bloco" id="roteiro" hidden></div>
       <div class="bloco" id="bloco-texto">
         <div class="rotulo">Texto</div>
         <div id="texto" class="vazio">–</div>
@@ -70,6 +71,7 @@
         <button id="btn-mais" aria-expanded="false" aria-controls="menu-mais">Mais ▾</button>
       </div>
       <div id="menu-mais" hidden>
+        <button id="btn-roteiro" hidden>Roteiro do teste…</button>
         <button id="btn-camera">Câmera… <kbd>C</kbd></button>
         <button id="btn-luz" title="Escurece ou clareia a imagem na própria câmera">Luz da câmera… <kbd>L</kbd></button>
         <button id="btn-tela-cheia">Tela cheia <kbd>F</kbd></button>
@@ -91,6 +93,29 @@
     </div>
     <div class="botoes">
       <button value="ok" class="principal">Entrar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-pesquisa">
+  <form method="dialog">
+    <h2>Teste do Libre-se</h2>
+    <p>Obrigado por participar da pesquisa do TCC! <strong>Nada é salvo:</strong> a imagem da câmera não sai
+      do seu aparelho; só os pontos das mãos (coordenadas) vão para o servidor, e os sinais que você gravar
+      são apagados quando você fecha a página. O teste leva uns 10 minutos.</p>
+    <ol class="roteiro-lista">
+      <li><strong>Alfabeto:</strong> no modo ALFABETO, soletre <strong>L-I-B-R-A-S</strong>. Depois, se quiser,
+        o seu primeiro nome. Segure cada letra parada um instante.</li>
+      <li><strong>Sinais:</strong> no modo CALIBRADO, o app pede <strong>oi, obrigado, café, pão e tchau</strong>,
+        3 vezes cada (é a calibração). Não sabe algum? Toque em “Como se faz?”.</li>
+      <li><strong>Reconhecimento:</strong> depois da calibração, faça cada um dos 5 sinais <strong>2 vezes</strong>
+        e conte quantas vezes o app acertou.</li>
+      <li>Volte para a aba do <strong>formulário</strong> e conte como foi.</li>
+    </ol>
+    <p class="suave">Dica: luz de frente, mão inteira no quadro, faça o sinal e abaixe a mão.
+      Com muita luz, use Mais → Luz da câmera.</p>
+    <div class="botoes">
+      <button value="ok" class="principal" autofocus>Começar</button>
     </div>
   </form>
 </dialog>

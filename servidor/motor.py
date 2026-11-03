@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 import time
 import warnings
 from pathlib import Path
@@ -40,6 +41,10 @@ MODOS = ["ALFABETO", "PALAVRAS", "CALIBRADO"]
 PERFIL_REFERENCIA = os.environ.get("LIBRES_REFERENCIA", REFERENCIA_PADRAO)
 PONTOS_CORPO = [0, 11, 12, 13, 14, 15, 16, 23, 24]   # nariz, ombros, cotovelos, punhos, quadris
 MAX_PALAVRAS_VOCAB = 60
+# MODO PESQUISA (pagina com ?pesquisa=1, para o teste com usuarios do TCC): a calibracao vai para
+# uma pasta temporaria, apagada quando a sessao expira; nada fica no volume do servidor
+PALAVRAS_PESQUISA = ["oi", "obrigado", "café", "pão", "tchau"]
+REPETICOES_PESQUISA = 3
 MAX_TAM_PALAVRA = 40
 
 
@@ -160,9 +165,11 @@ class Sessao:
     """Um usuario conectado: o estado do libras_camera.py inteiro, quadro a quadro."""
 
     def __init__(self, recursos: Recursos, usuario: str = "padrao", repeticoes: int = 5,
-                 modo: Optional[str] = None) -> None:
+                 modo: Optional[str] = None, efemera: bool = False) -> None:
         self.r = recursos
         self.usuario = (usuario or "padrao").strip()[:40] or "padrao"
+        self.efemera = efemera
+        self.pasta_temp: Optional[Path] = None
         self.modos = recursos.modos()
         if not self.modos:
             raise RuntimeError("nenhum modelo carregado no servidor")
@@ -184,11 +191,19 @@ class Sessao:
         self.saidas: list[dict] = []          # mensagens extras para o navegador (exemplo da tecla V)
         self.n_quadros = 0
         # ------------------------------------------------ calibracao (por usuario)
-        base = recursos.pasta_dados / "calibracao"
+        self.base_ref = recursos.pasta_dados / "calibracao"    # onde esta o perfil de referencia
+        if efemera:
+            self.pasta_temp = Path(tempfile.mkdtemp(prefix="libres_pesquisa_"))
+            base = self.pasta_temp / "calibracao"
+            repeticoes = REPETICOES_PESQUISA
+        else:
+            base = self.base_ref
         pasta = base / slug(self.usuario)
         pasta.mkdir(parents=True, exist_ok=True)
         self.vocab_arq = pasta / "vocabulario.txt"
-        if not self.vocab_arq.exists() and recursos.vocab_padrao.exists():
+        if efemera:
+            self.vocab_arq.write_text("\n".join(PALAVRAS_PESQUISA) + "\n", encoding="utf-8")
+        elif not self.vocab_arq.exists() and recursos.vocab_padrao.exists():
             shutil.copyfile(recursos.vocab_padrao, self.vocab_arq)    # comeca com o do projeto
         self.cal = Calibracao(self.usuario, self.vocab_arq, pasta_base=base, repeticoes=max(2, repeticoes))
         self._contagem: dict[str, int] = {}
@@ -210,6 +225,12 @@ class Sessao:
         self.modo = modo if modo in self.modos else self.modos[0]
         if self.modo == "CALIBRADO":
             self.entrar_calibrado()
+
+    def descartar(self) -> None:
+        """Modo pesquisa: apaga a pasta temporaria (os exemplos gravados no teste)."""
+        if self.pasta_temp is not None:
+            shutil.rmtree(self.pasta_temp, ignore_errors=True)
+            self.pasta_temp = None
 
     # ------------------------------------------------------------ texto
     def texto_completo(self) -> str:
@@ -573,7 +594,7 @@ class Sessao:
     def _pasta_referencia(self, palavra: str) -> Optional[Path]:
         if slug(self.usuario) == slug(PERFIL_REFERENCIA):
             return None
-        return self.cal.pasta.parent / slug(PERFIL_REFERENCIA) / slug(palavra)
+        return self.base_ref / slug(PERFIL_REFERENCIA) / slug(palavra)
 
     def tem_referencia(self, palavra: str) -> bool:
         self.n(palavra)                                       # renova o cache a cada 2 s
@@ -584,7 +605,7 @@ class Sessao:
 
     def exemplo_referencia(self, palavra: str) -> Optional[dict]:
         """O exemplo do perfil de referencia (se existe e tem essa palavra)."""
-        return exemplo_referencia(palavra, self.vocab_arq, self.cal.pasta.parent, self.usuario,
+        return exemplo_referencia(palavra, self.vocab_arq, self.base_ref, self.usuario,
                                   self.cal.repeticoes, PERFIL_REFERENCIA)
 
     def _trocar_vocabulario(self, palavras: list) -> None:
@@ -618,7 +639,7 @@ class Sessao:
     # ------------------------------------------------------------ estado para o painel
     def estado(self) -> dict:
         t = self.t
-        e = {"modo": self.modo, "modos": self.modos, "texto": self.texto_completo(),
+        e = {"modo": self.modo, "modos": self.modos, "texto": self.texto_completo(), "pesquisa": self.efemera,
              "fps": round(self.fps, 1), "gravando": self.gravando(),
              "entrou": self.entrou if t < self.entrou_ate else None,
              "historico": [[round(ti, 3), item] for ti, item in self.historico],

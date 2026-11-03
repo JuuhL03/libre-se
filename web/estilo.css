@@ -196,3 +196,10 @@ dialog .botoes .principal { background: var(--cal); border-color: var(--cal); co
   #acoes kbd { display: none; }
 }
 @media (hover: none) { #acoes kbd { display: none; } }
+
+/* modo pesquisa (?pesquisa=1) */
+.roteiro-lista { margin: 8px 0 10px; padding-left: 20px; line-height: 1.45; }
+.roteiro-lista li { margin: 6px 0; }
+#roteiro { font-size: .85rem; line-height: 1.4; }
+#roteiro .tarefa { color: var(--cal); font-weight: 600; }
+#perfil.pesquisa { cursor: pointer; }

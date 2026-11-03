@@ -5,6 +5,8 @@ import { FilesetResolver, HandLandmarker, PoseLandmarker } from "./vendor/tasks-
 
 const PARAMS = new URLSearchParams(location.search);
 const TESTE = PARAMS.has("teste");               // ganchos para os testes automaticos
+// modo pesquisa (teste com usuarios do TCC): anonimo, sem perfil e sem salvar nada no servidor
+const PESQUISA = PARAMS.has("pesquisa");
 const SEM_CAMERA = TESTE && PARAMS.has("semcamera");
 // processamento do MediaPipe: "cpu" da pontos identicos aos do app de computador (Python);
 // "gpu" e mais rapida em celular. "auto" (padrao): comeca na CPU e, se ficar lenta, testa a GPU.
@@ -60,7 +62,7 @@ const r4 = (x) => Math.round(x * 1e4) / 1e4;
 
 const S = {
   info: null, est: null, modo: null, deteccao: "v3",
-  usuario: ler("libres.usuario"), codigo: ler("libres.codigo"), sid: novoId(),
+  usuario: PESQUISA ? "pesquisa" : ler("libres.usuario"), codigo: ler("libres.codigo"), sid: novoId(),
   ws: null, conectado: false, tentativas: 0, emVoo: 0, idLote: 0, tEnvio: 0, timerReconexao: null,
   fila: [], video: null, stream: null, cameras: [], camAtual: null,
   maos: null, pose: null, numHands: 2, trocando: false, ultimaPose: null, tPose: -1e9,
@@ -94,7 +96,7 @@ function pedirPerfil(motivo = "") {
     if (motivo) ui.dlgPerfil.querySelector("p").textContent = motivo;
     ui.dlgPerfil.addEventListener("close", () => {
       const u = ui.campoUsuario.value.trim();
-      if (u) { S.usuario = u; gravar("libres.usuario", u); }
+      if (u && !PESQUISA) { S.usuario = u; gravar("libres.usuario", u); }
       if (!ui.blocoCodigo.hidden) { S.codigo = ui.campoCodigo.value.trim(); gravar("libres.codigo", S.codigo); }
       resolve();
     }, { once: true });
@@ -103,6 +105,7 @@ function pedirPerfil(motivo = "") {
   });
 }
 ui.perfil.addEventListener("click", async () => {
+  if (PESQUISA) { abrirRoteiro(); return; }
   await pedirPerfil("Cada pessoa tem a sua calibração. Trocar o perfil começa uma sessão nova.");
   S.sid = novoId();
   reconectar(true);
@@ -478,6 +481,7 @@ function urlWs() {
   const q = new URLSearchParams({ usuario: S.usuario || "padrao", sid: S.sid });
   if (S.codigo) q.set("codigo", S.codigo);
   if (S.modo) q.set("modo", S.modo);
+  if (PESQUISA) q.set("pesquisa", "1");
   return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?${q}`;
 }
 
@@ -525,7 +529,7 @@ function comando(cmd, extra = {}) {
 function tratar(msg) {
   if (msg.tipo === "config") {
     S.info = { ...S.info, ...msg };
-    ui.perfil.textContent = msg.usuario;
+    ui.perfil.textContent = PESQUISA ? "pesquisa · nada é salvo" : msg.usuario;
     renderizar(msg.estado);
     if (msg.avisos && msg.avisos.length) {              // ex.: modelo salvo com outra versao do scikit-learn
       console.warn("avisos do servidor:", msg.avisos);
@@ -605,7 +609,8 @@ function renderizar(e) {
     } else if (c === "v") b.hidden = !cal;
     else if ("pnrd".includes(c)) b.hidden = !calibrando;
   }
-  $("#btn-vocab").hidden = !cal || calibrando;
+  $("#btn-vocab").hidden = !cal || calibrando || PESQUISA;
+  if (PESQUISA) mostrarRoteiro(e);
   document.body.classList.toggle("calibrando", !!calibrando);   // celular: esconde o TEXTO para caber o painel
   $("#acoes-ctx").hidden = !cal;
 }
@@ -1018,11 +1023,48 @@ async function iniciar() {
     carregando("Servidor fora do ar", "Não foi possível falar com o servidor. Confira a internet e tente de novo.", true);
     return;
   }
-  if (!S.usuario || (S.info.precisa_codigo && !S.codigo)) await pedirPerfil();
-  ui.perfil.textContent = S.usuario || "padrao";
+  if (PESQUISA) {
+    if (S.info.precisa_codigo && !S.codigo) await pedirPerfil();
+    S.usuario = "pesquisa";
+    ui.perfil.classList.add("pesquisa");
+    $("#btn-roteiro").hidden = false;
+    await abrirRoteiro();
+  } else if (!S.usuario || (S.info.precisa_codigo && !S.codigo)) await pedirPerfil();
+  ui.perfil.textContent = PESQUISA ? "pesquisa · nada é salvo" : S.usuario || "padrao";
   conectar();
   if (SEM_CAMERA) { pronto(); iniciarLaco(); return; }
   if (await etapaCamera()) await etapaDeteccao();
+}
+
+// ------------------------------------------------------------------ modo pesquisa (?pesquisa=1)
+function abrirRoteiro() {
+  const d = $("#dlg-pesquisa");
+  return new Promise((resolve) => {
+    d.addEventListener("close", resolve, { once: true });
+    if (!d.open) d.showModal();
+  });
+}
+$("#btn-roteiro").addEventListener("click", abrirRoteiro);
+function mostrarRoteiro(e) {
+  const r = $("#roteiro");
+  const c = e.cal, calibrado = e.modo === "CALIBRADO";
+  let tarefa, txt;
+  if (!calibrado) {
+    tarefa = "Tarefa 1 · Alfabeto";
+    txt = e.modo === "ALFABETO"
+      ? "Soletre L-I-B-R-A-S (e, se quiser, o seu nome). Depois toque em CALIBRADO para a tarefa 2."
+      : "Toque em ALFABETO para a tarefa 1 ou em CALIBRADO para a tarefa 2.";
+  } else if (c && c.calibrando) {
+    const feitos = (c.palavras || []).filter(([, n]) => n >= c.rep).length;
+    tarefa = `Tarefa 2 · Calibração (${feitos}/${c.total} sinais prontos)`;
+    txt = `Faça “${c.palavra}” quando a tela pedir (${c.n}/${c.rep}). Não sabe? “Como se faz?”.`;
+  } else {
+    tarefa = "Tarefa 3 · Reconhecimento";
+    txt = "Faça oi, obrigado, café, pão e tchau, 2 vezes cada, e conte os acertos. " +
+      "Depois volte ao formulário.";
+  }
+  if (mudou("roteiro", [tarefa, txt])) trocar(r, el("div", { class: "tarefa", text: tarefa }), el("div", { text: txt }));
+  r.hidden = false;
 }
 
 // ------------------------------------------------------------------ ganchos de teste (?teste=1)
