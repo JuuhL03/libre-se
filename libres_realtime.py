@@ -565,6 +565,10 @@ class _Segmento:
         if forma == "IND":
             if not (anda or recua):
                 return None
+            # o modelo parado ve um L na maior parte do gesto (polegar aberto que a regra
+            # de forma nao pegou): e a mao em L se mexendo, nao Z nem X
+            if np.mean([e == "L" for e in self.estaticas[i:j + 1]]) >= 0.5:
+                return None
             if m["inv_x"] >= 2 and m["dy"] >= 0.3 * m["dx"] and m["gancho"] < 0.5:
                 return "Z"
             return "X"

@@ -632,10 +632,17 @@ function desenharAgora(e) {
     f.push(el("div", { class: "rotulo" }, el("span", { text: `Calibração — palavra ${c.idx + 1} de ${c.total}` })));
     f.push(el("div", { class: "suave", text: "Faça o sinal:" }));
     f.push(el("div", { class: "grande", text: nome(c.palavra) }));
-    f.push(el("div", { class: "comosefaz" },
-      externo(linkDicionario(c.palavra), "Como se faz? ↗", "botao-link"),
-      externo(DICIONARIO_INES, "Dicionário INES ↗", "botao-link discreto")));
-    if (c.ref && !c.n) f.push(el("div", { class: "suave linha", text: "Ver exemplo (V): como a referência faz este sinal" }));
+    // com o perfil de referencia, "Como se faz?" mostra o sinal ali mesmo, na tela (tecla V);
+    // os dicionarios ficam de reserva (nem toda palavra tem video la)
+    f.push(c.ref
+      ? el("div", { class: "comosefaz" },
+        el("button", { type: "button", class: "botao-link", "data-cmd": "v", text: "Como se faz? (V)" }),
+        externo(linkDicionario(c.palavra), "Spread the Sign ↗", "botao-link discreto"),
+        externo(DICIONARIO_INES, "INES ↗", "botao-link discreto"))
+      : el("div", { class: "comosefaz" },
+        externo(linkDicionario(c.palavra), "Como se faz? ↗", "botao-link"),
+        externo(DICIONARIO_INES, "Dicionário INES ↗", "botao-link discreto")));
+    if (c.ref && !c.n) f.push(el("div", { class: "suave linha", text: "a mão de exemplo aparece na câmera" }));
     const bol = el("div", { class: "bolinhas" });
     for (let k = 0; k < c.rep; k++) bol.append(el("i", { class: k < c.n ? "cheia" : "" }));
     bol.append(el("span", { text: `${Math.min(c.n, c.rep)} de ${c.rep}` }));
@@ -826,6 +833,10 @@ ui.modos.addEventListener("click", (ev) => {
   if (b && !b.disabled) comando("modo", { alvo: b.dataset.modo });
 });
 ui.acoes.addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-cmd]");
+  if (b) comando(b.dataset.cmd);
+});
+ui.agora.addEventListener("click", (ev) => {          // "Como se faz? (V)" do painel da calibracao
   const b = ev.target.closest("button[data-cmd]");
   if (b) comando(b.dataset.cmd);
 });

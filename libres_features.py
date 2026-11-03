@@ -356,10 +356,23 @@ def indicador_gancho(raw: np.ndarray, g: dict | None = None) -> bool:
     return 50 < a["indicador"][0] < 160 and d(6) > d(10) * 1.12 and d(7) > d(11) * 1.2
 
 
+def polegar_em_l(raw: np.ndarray) -> bool:
+    """Polegar aberto para o lado, em angulo com o indicador (o L). No D, no G, no Z
+    e no X o polegar fica junto da mao (encostado no medio ou paralelo ao indicador).
+    Nas poses reais com so o indicador esticado: pega 91% dos L e 0% dos D, G e X."""
+    r = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+    tam = max(float(np.linalg.norm(r[9] - r[0])), 1e-9)
+    longe = float(np.linalg.norm(r[4] - r[10])) / tam >= 0.8      # ponta do polegar longe do medio
+    v1, v2 = r[4] - r[2], r[8] - r[5]
+    cos = float(np.dot(v1, v2) / max(np.linalg.norm(v1) * np.linalg.norm(v2), 1e-9))
+    return longe and np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))) >= 38
+
+
 def forma_mao(raw: np.ndarray) -> str | None:
     """Configuracoes simples e bem definidas (None = deixa para o modelo):
     'Y', 'I' (so o minimo), 'U'/'R'/'V'/'DOIS' (indicador + medio),
-    'INDICADOR' (so o indicador), 'GANCHO' (indicador curvado, o X)."""
+    'INDICADOR' (so o indicador), 'L' (indicador e polegar aberto), 'GANCHO'
+    (indicador curvado, o X)."""
     if eh_y(raw):
         return "Y"
     g = geometria_mao(raw)
@@ -370,7 +383,8 @@ def forma_mao(raw: np.ndarray) -> str | None:
     if i and m and not (a or mi):
         return letra_urv(raw) or "DOIS"
     if i and not (m or a or mi):
-        return "INDICADOR"
+        # o L nao e base de gesto: mexer a mao em L nao pode virar Z ou X
+        return "L" if polegar_em_l(raw) else "INDICADOR"
     if indicador_gancho(raw, g):
         return "GANCHO"
     return None

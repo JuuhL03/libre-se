@@ -66,6 +66,27 @@ def loso(reais, aum, y, sinal, rotulo: str):
     return np.array(reais_y), np.array(prev), float(np.mean(accs))
 
 
+def divisao_aleatoria(reais, aum, y, semente: int = 42) -> float:
+    """Treino/teste 80/20 sorteado por video, estratificado por palavra. A mesma pessoa aparece
+    no treino e no teste, entao o numero e otimista: serve para comparar com o LOSO."""
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+    idx = np.arange(len(y))
+    tr, te = train_test_split(idx, test_size=0.2, stratify=y, random_state=semente)
+    Xtr, Ytr = T.empilhar(reais, aum, y, tr)
+    sc = StandardScaler().fit(Xtr)
+    m = T.novo_modelo(T.N_ARVORES, rotulo="divisao aleatoria", cada=100)
+    m.fit(sc.transform(Xtr), Ytr, verbose=False)
+    p = m.predict(sc.transform(reais[te]))
+    acc, bal = accuracy_score(y[te], p), balanced_accuracy_score(y[te], p)
+    print("\n" + "=" * 60)
+    print(f">>> DIVISAO ALEATORIA 80/20 (por video): acc={acc * 100:.1f}%  bal_acc={bal * 100:.1f}%  "
+          f"({len(te)} sinais no teste) <<<")
+    print("=" * 60)
+    return acc
+
+
 ULTIMO_POR_PESSOA: dict = {}          # acerto de cada pessoa no ultimo loso() (para o --antes-depois)
 
 
@@ -115,6 +136,8 @@ def main() -> None:
     ap.add_argument("--sem-mao-parada", action="store_true",
                     help="ignora a outra mao quando ela fica parada a vista longe do sinal (diagnostico_v3.py)")
     ap.add_argument("--meta", type=float, default=85.0, help="acerto minimo para sugerir a palavra")
+    ap.add_argument("--aleatoria", action="store_true",
+                    help="tambem mede a divisao ALEATORIA 80/20 por video (a mesma pessoa nos dois lados)")
     ap.add_argument("--antes-depois", action="store_true",
                     help="roda sem as opcoes e com elas e compara pessoa por pessoa (leva o dobro do tempo)")
     args = ap.parse_args()
@@ -139,6 +162,9 @@ def main() -> None:
     y = le.fit_transform(rot)
     print("\n  calculando features (uma vez so)...")
     reais, aum = T.calcular_features(seqs, chaves=[a.name for a in arqs])
+    print(f"\n  {len(y)} sinais, {len(le.classes_)} palavras, {len(set(sinal.tolist()))} sinalizantes")
+    if args.aleatoria:
+        divisao_aleatoria(reais, aum, y)
     r, p, media_v3 = loso(reais, aum, y, sinal, "v3")
 
     print("\nAcerto por palavra (pessoa fora do treino):")
