@@ -591,7 +591,7 @@ function renderizar(e) {
   }
   S.ultimoFalado = e.entrou;
   if (e.aviso) aviso(e.aviso);
-  if (mudou("agora", [e.modo, e.alfa, e.gravando, e.ultimo, e.cal && [e.cal.calibrando, e.cal.palavra, e.cal.n,
+  if (mudou("agora", [e.modo, e.alfa, e.alfa_cal, e.alfa_pessoal, e.gravando, e.ultimo, e.cal && [e.cal.calibrando, e.cal.palavra, e.cal.n,
     e.cal.idx, e.cal.msg, e.cal.msg_ruim, e.cal.tem_reconhecedor, e.cal.ref]])) desenharAgora(e);
   if (mudou("lista", [e.modo, e.cal && [e.cal.palavras, e.cal.resumo, e.cal.detalhes, e.cal.calibrando, e.cal.fps_cal],
     S.info && S.info.palavras])) desenharLista(e);
@@ -617,7 +617,24 @@ function renderizar(e) {
 
 function desenharAgora(e) {
   const f = [];
-  if (e.modo === "ALFABETO") {
+  if (e.modo === "ALFABETO" && e.alfa_cal) {
+    const c = e.alfa_cal;
+    f.push(el("div", { class: "rotulo", text: `Calibração do alfabeto — letra ${c.idx + 1} de ${c.total}` }));
+    const cv = el("canvas", { width: 160, height: 160, class: "alfa-cal-mao", "aria-hidden": "true" });
+    f.push(el("div", { class: "alfa-cal" }, el("div", {}, el("div", { class: "suave", text: "Faça e segure:" }),
+      el("div", { class: "grande", text: c.letra })), cv));
+    if (ALFABETO && ALFABETO[c.letra]) desenharLetra(cv, ALFABETO[c.letra].p, null);
+    else carregarAlfabeto().then(() => { if (ALFABETO && ALFABETO[c.letra]) desenharLetra(cv, ALFABETO[c.letra].p, null); });
+    const barra = el("div", { class: "alfa-cal-barra" }, el("i", { style: `width:${Math.round(100 * c.n / c.meta)}%` }));
+    f.push(barra);
+    f.push(el("div", { class: "suave linha", text: c.n ? "segurando… mantenha a mão parada" :
+      "faça a letra com a mão inteira no quadro e deixe parada um instante" }));
+    if (c.msg) f.push(el("div", { class: "msg boa", text: c.msg }));
+    f.push(el("div", { class: "comosefaz" },
+      el("button", { type: "button", class: "botao-link", "data-cmd": "palfa", text: "◀ Voltar" }),
+      el("button", { type: "button", class: "botao-link", "data-cmd": "nalfa", text: "Pular ▶" }),
+      el("button", { type: "button", class: "botao-link discreto", "data-cmd": "kalfa", text: "Terminar" })));
+  } else if (e.modo === "ALFABETO") {
     f.push(el("div", { class: "rotulo", text: "Letra agora" }));
     const a = e.alfa;
     if (a && a.letra) {
@@ -627,8 +644,13 @@ function desenharAgora(e) {
         a.movendo ? el("span", { class: "medio atencao", text: "  movimento…" }) : null));
       f.push(el("div", { class: "suave linha", text: (a.top || []).map(([l, c]) => `${l} ${pct(c)}`).join("   ") }));
     } else f.push(el("div", { class: "suave", text: "mostre a mão" }));
-    f.push(el("button", { type: "button", class: "botao-link botao-alfa", "data-alfabeto": "1",
-      text: "Ver o alfabeto (A)" }));
+    f.push(el("div", { class: "comosefaz botao-alfa" },
+      el("button", { type: "button", class: "botao-link", "data-alfabeto": "1", text: "Ver o alfabeto (A)" }),
+      el("button", { type: "button", class: "botao-link", "data-cmd": "kalfa",
+        text: e.alfa_pessoal ? "Recalibrar meu alfabeto" : "Calibrar meu alfabeto" }),
+      e.alfa_pessoal ? el("button", { type: "button", class: "botao-link discreto", "data-cmd": "ralfa",
+        text: "Usar o geral" }) : null));
+    if (e.alfa_pessoal) f.push(el("div", { class: "suave linha", text: "usando a sua calibração do alfabeto" }));
   } else if (e.modo === "CALIBRADO" && e.cal && e.cal.calibrando) {
     const c = e.cal;
     f.push(el("div", { class: "rotulo" }, el("span", { text: `Calibração — palavra ${c.idx + 1} de ${c.total}` })));
@@ -969,11 +991,16 @@ function abrirLuz() {
 // ------------------------------------------------------------------ guia do alfabeto
 // a mao tipica de cada letra (web/alfabeto.json: 21 pontos x/y normalizados, como no espelho do app)
 let ALFABETO = null;
+async function carregarAlfabeto() {
+  if (!ALFABETO) {
+    try { ALFABETO = await (await fetch("alfabeto.json")).json(); } catch { ALFABETO = null; }
+  }
+  return ALFABETO;
+}
 async function abrirAlfabeto() {
   const d = $("#dlg-alfabeto");
-  if (!ALFABETO) {
-    try { ALFABETO = await (await fetch("alfabeto.json")).json(); }
-    catch { aviso("não consegui abrir o guia do alfabeto", true); return; }
+  if (!$("#alfa-grade").children.length) {
+    if (!(await carregarAlfabeto())) { aviso("não consegui abrir o guia do alfabeto", true); return; }
     const grade = $("#alfa-grade");
     for (const [letra, v] of Object.entries(ALFABETO)) {
       const cv = el("canvas", { width: 160, height: 160, "aria-hidden": "true" });

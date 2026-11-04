@@ -28,7 +28,7 @@ import numpy as np
 from libres_modelos import carregar_modelo
 from libres_features import (FEAT_DIM, FEATURE_VERSION, N_COORDS, N_LANDMARKS,
                              alphabet_features, mirror_raw, eh_y, familia_forma, forma_mao,
-                             letra_urv, letra_ase,
+                             letra_urv, letra_ase, letra_para_baixo,
                              compute_enhanced_features, normalize_landmarks,
                              normalize_sequence)
 
@@ -395,7 +395,7 @@ class LetterRecognizer:
 # Letras com movimento no alfabeto manual da Libras (H, J, K, X, Z).
 LETRAS_DINAMICAS = {"H", "J", "K", "X", "Z"}
 # letras paradas que podem ser o comeco (ou o meio) de um Z ou de um X: o indicador sozinho
-BASES_ZX = {"D", "G", "P", "Q", "X", "Z", "I"}
+BASES_ZX = {"D", "G", "P", "X", "Z", "I"}
 BASES_HK = {"H", "K", "U", "V", "R"}      # indicador e medio levantados
 
 
@@ -679,8 +679,13 @@ class Soletrador:
     def _estatica(self, raw: np.ndarray, top: list) -> tuple[str, float]:
         est = [(l, c) for l, c in top if l not in LETRAS_DINAMICAS] or top
         letra, conf = est[0]
+        if getattr(self.rec, "ultimo_confiante", False):
+            return letra, conf     # alfabeto calibrado: o exemplo da propria pessoa decide
         if eh_y(raw):
             return "Y", max(conf, 0.95)
+        baixo = letra_para_baixo(raw)          # M, N, Q: dedos apontando para baixo
+        if baixo:
+            return baixo, max(conf, 0.9)
         if letra in ("U", "R", "V"):
             fam = sum(c for l, c in est if l in ("U", "R", "V"))
             urv = letra_urv(raw)

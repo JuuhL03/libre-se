@@ -355,6 +355,29 @@ def letra_ase(raw: np.ndarray, p_s: float = 0.0, p_e: float = 0.0) -> str | None
     return "S" if d < 0.46 else "E"
 
 
+def letra_para_baixo(raw: np.ndarray) -> str | None:
+    """M, N e Q da Libras: dedos esticados apontando para BAIXO (o resto da mao fechada).
+    M = indicador, medio e anelar; N = indicador e medio juntos (paralelos: no P eles se
+    abrem); Q = so o indicador. Nas poses de pessoas que o modelo nao viu: N 61% (o
+    modelo, 50%), Q 76% (o modelo, 0%), e o P quase nunca vira N."""
+    a = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+    tam = max(float(np.linalg.norm(a[9] - a[0])), 1e-9)
+    e = geometria_mao(raw)["esticado"]
+    baixo = lambda b, t: (a[t, 1] - a[b, 1]) / tam > 0.35      # y da imagem cresce para baixo
+    i, m, an, mi = e["indicador"], e["medio"], e["anelar"], e["minimo"]
+    if i and m and an and not mi and baixo(5, 8) and baixo(9, 12) and baixo(13, 16):
+        return "M"
+    if i and m and not an and not mi and baixo(5, 8) and baixo(9, 12):
+        u, v = a[8] - a[5], a[12] - a[9]
+        cos = float(np.dot(u, v) / max(np.linalg.norm(u) * np.linalg.norm(v), 1e-9))
+        if np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))) < 15:
+            return "N"
+        return None
+    if i and not m and not an and not mi and baixo(5, 8):
+        return "Q"
+    return None
+
+
 def eh_y(raw: np.ndarray) -> bool:
     """Y: minimo reto, polegar para fora, indicador/medio/anelar bem dobrados.
     Nos datasets: 100% de precisao, pega 92% dos Y (o modelo sozinho: 0%)."""

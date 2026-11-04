@@ -34,6 +34,7 @@ from calibracao import (Calibracao, avaliar_exemplo, exemplo_referencia,  # noqa
 from libres_realtime import (LetterRecognizer, SignSegmenter, SignSegmenterV3,  # noqa: E402
                              Soletrador, WordRecognizer, WordRecognizerV3, accept_word)
 from libres_v3 import rastrear  # noqa: E402
+import alfabeto_calibrado as AC  # noqa: E402
 
 MODOS = ["ALFABETO", "PALAVRAS", "CALIBRADO"]
 # perfil de REFERENCIA: alguem que conhece os sinais calibra com este nome; quem ainda nao gravou
@@ -175,6 +176,8 @@ class Sessao:
             raise RuntimeError("nenhum modelo carregado no servidor")
         self.segmenter = SignSegmenterV3() if recursos.words_v3 is not None else SignSegmenter()
         self.soletrador = Soletrador(recursos.letters) if recursos.letters is not None else None
+        self.alfa_cal: Optional[dict] = None      # calibracao do alfabeto em andamento
+        self.alfa_pessoal = False                 # o soletrador usa os exemplos da pessoa
         self.texto: list[str] = []
         self.letra_atual: list[str] = []
         self.ultimo_top: list = []
@@ -206,6 +209,7 @@ class Sessao:
         elif not self.vocab_arq.exists() and recursos.vocab_padrao.exists():
             shutil.copyfile(recursos.vocab_padrao, self.vocab_arq)    # comeca com o do projeto
         self.cal = Calibracao(self.usuario, self.vocab_arq, pasta_base=base, repeticoes=max(2, repeticoes))
+        self._carregar_alfabeto()
         self._contagem: dict[str, int] = {}
         self._ref: dict[str, bool] = {}       # a referencia tem exemplo da palavra? (mesmo cache de 2 s)
         self._t_contagem = 0.0
@@ -225,6 +229,77 @@ class Sessao:
         self.modo = modo if modo in self.modos else self.modos[0]
         if self.modo == "CALIBRADO":
             self.entrar_calibrado()
+
+    # ------------------------------------------------------------ alfabeto calibrado
+    def _carregar_alfabeto(self) -> None:
+        if self.r.letters is None:
+            return
+        ex = AC.carregar(self.cal.pasta)
+        if ex:
+            try:
+                self.soletrador = Soletrador(AC.AlfabetoPessoal(self.r.letters, ex))
+                self.alfa_pessoal = True
+            except ValueError:
+                pass
+
+    def _letras_calibrar(self) -> list[str]:
+        # J e Z so existem com movimento: nao ha pose parada para guardar
+        return [l for l in self.r.letters.classes if l not in ("J", "Z")] if self.r.letters is not None else []
+
+    def iniciar_alfabeto(self) -> None:
+        letras = self._letras_calibrar()
+        if not letras:
+            self.avisar("modelo do alfabeto ausente no servidor")
+            return
+        antigos = AC.carregar(self.cal.pasta) or {}
+        self.alfa_cal = {"letras": letras, "idx": 0, "t_letra": self.t, "pos": None,
+                         "ex": {l: list(antigos.get(l, [])) for l in letras}, "novos": {},
+                         "msg": "", "msg_ate": -1e9}
+        self.soletrador.reset()
+
+    def terminar_alfabeto(self) -> None:
+        c, self.alfa_cal = self.alfa_cal, None
+        if not c:
+            return
+        ex = {l: v for l, v in c["ex"].items() if len(v)}
+        if ex:
+            AC.salvar(self.cal.pasta, ex)
+            self.soletrador = Soletrador(AC.AlfabetoPessoal(self.r.letters, ex))
+            self.alfa_pessoal = True
+            self.avisar(f"alfabeto calibrado: {len(ex)} letras")
+        elif self.soletrador is not None:
+            self.soletrador.reset()
+
+    def _quadro_alfabeto_cal(self, lm: Optional[np.ndarray], t: float) -> None:
+        """Guarda os quadros PARADOS da letra da vez; com EXEMPLOS_POR_LETRA, passa a proxima."""
+        c = self.alfa_cal
+        letra = c["letras"][c["idx"]]
+        if lm is None:
+            c["pos"] = None
+            return
+        a = lm.reshape(21, 3)
+        tam = float(np.linalg.norm(a[9, :2] - a[0, :2])) or 1.0
+        pos = a[:, :2].copy()
+        parado = c["pos"] is not None and float(np.abs(pos - c["pos"]).max()) / tam < 0.08
+        c["pos"] = pos
+        if t - c["t_letra"] < 0.8 or not parado:      # tempo de fazer a letra; so a mao parada
+            return
+        novos = c["novos"].setdefault(letra, [])
+        novos.append(lm.copy())
+        if len(novos) >= AC.EXEMPLOS_POR_LETRA:
+            c["ex"][letra] = novos                     # regravar substitui os antigos
+            self._avancar_alfabeto(+1, f"{letra} ok")
+
+    def _avancar_alfabeto(self, passo: int, msg: str = "") -> None:
+        c = self.alfa_cal
+        c["idx"] += passo
+        c["t_letra"], c["pos"] = self.t, None
+        c["msg"], c["msg_ate"] = msg, self.t + 1.5
+        if c["idx"] >= len(c["letras"]):
+            self.terminar_alfabeto()
+        else:
+            c["idx"] = max(0, c["idx"])
+            c["novos"].pop(c["letras"][c["idx"]], None)
 
     def descartar(self) -> None:
         """Modo pesquisa: apaga a pasta temporaria (os exemplos gravados no teste)."""
@@ -421,7 +496,9 @@ class Sessao:
         v3 = (maos, lado, pose) if presentes else None
         self.info_alfa = None
 
-        if self.modo == "ALFABETO":
+        if self.modo == "ALFABETO" and self.alfa_cal is not None:
+            self._quadro_alfabeto_cal(lm, t)
+        elif self.modo == "ALFABETO":
             if self.soletrador is not None:
                 self.soletrador.aspecto = aspecto
                 info = self.soletrador.update(lm, t)
@@ -484,6 +561,8 @@ class Sessao:
             # um gesto (J, Z...) que ainda nao terminou entra antes de trocar de modo
             fim = self.soletrador.finalizar(t)
             self._aplicar_letra(fim, t)
+        if cmd == "modo" and self.alfa_cal is not None:
+            self.terminar_alfabeto()
         if cmd == "modo":
             alvo = dados.get("alvo")
             if alvo not in self.modos:
@@ -518,6 +597,19 @@ class Sessao:
                 self.msg_cal("termine a calibracao (K) antes de mudar o vocabulario", ruim=True)
             else:
                 self._trocar_vocabulario(dados.get("palavras") or [])
+        elif cmd == "kalfa" and self.modo == "ALFABETO" and self.r.letters is not None:
+            if self.alfa_cal is None:
+                self.iniciar_alfabeto()
+            else:
+                self.terminar_alfabeto()
+        elif cmd in ("nalfa", "palfa") and self.alfa_cal is not None:
+            self._avancar_alfabeto(+1 if cmd == "nalfa" else -1)
+        elif cmd == "ralfa" and self.modo == "ALFABETO" and self.alfa_cal is None:
+            AC.apagar(self.cal.pasta)
+            if self.r.letters is not None:
+                self.soletrador = Soletrador(self.r.letters)
+            self.alfa_pessoal = False
+            self.avisar("calibracao do alfabeto apagada: volta o modelo geral")
         elif self.modo != "CALIBRADO":
             return
         elif cmd == "k":
@@ -647,6 +739,13 @@ class Sessao:
              "ultimo": {"top": [[str(p), _num(c, 3)] for p, c in self.ultimo_top],
                         "ok": self.ultimo_ok, "melhor": self.ultimo_melhor}}
         if self.modo == "ALFABETO":
+            c = self.alfa_cal
+            e["alfa_cal"] = None if c is None else {
+                "letra": c["letras"][c["idx"]], "idx": c["idx"], "total": len(c["letras"]),
+                "n": len(c["novos"].get(c["letras"][c["idx"]], [])), "meta": AC.EXEMPLOS_POR_LETRA,
+                "feitas": [l for l in c["letras"] if len(c["ex"].get(l, []))],
+                "msg": c["msg"] if t < c["msg_ate"] else None}
+            e["alfa_pessoal"] = self.alfa_pessoal
             a = self.info_alfa
             e["alfa"] = None if not a or not a.get("letra") else {
                 "letra": a["letra"], "conf": _num(a.get("conf", 0.0), 3), "aceita": bool(a.get("aceita")),

@@ -217,3 +217,9 @@ dialog .botoes .principal { background: var(--cal); border-color: var(--cal); co
 .alfa-item small { display: block; color: #8a3a22; font-size: .72rem; line-height: 1.25; margin-top: 2px; }
 .alfa-fonte { font-size: .75rem; margin-top: 10px; }
 .botao-alfa { margin-top: 8px; }
+
+/* calibracao do alfabeto */
+.alfa-cal { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.alfa-cal-mao { width: 96px; height: 96px; background: #fff; border-radius: 10px; flex: none; }
+.alfa-cal-barra { height: 8px; background: var(--linha); border-radius: 99px; overflow: hidden; margin: 8px 0 4px; }
+.alfa-cal-barra i { display: block; height: 100%; background: var(--ok, #5adc5a); transition: width .15s; }
