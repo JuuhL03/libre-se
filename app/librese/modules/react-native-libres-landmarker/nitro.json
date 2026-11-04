@@ -1,0 +1,30 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": [
+    "libreslandmarker"
+  ],
+  "ios": {
+    "iosModuleName": "NitroLibresLandmarker"
+  },
+  "android": {
+    "androidNamespace": [
+      "libreslandmarker"
+    ],
+    "androidCxxLibName": "NitroLibresLandmarker"
+  },
+  "autolinking": {
+    "LibresLandmarker": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridLibresLandmarker"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridLibresLandmarker"
+      }
+    }
+  },
+  "ignorePaths": [
+    "**/node_modules"
+  ]
+}

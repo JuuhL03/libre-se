@@ -43,3 +43,6 @@ coleta_alfabeto/
 # saidas locais (diagnosticos, publicar_site.bat)
 diagnostico*.txt
 listagem.txt
+
+# instrucoes do Claude Code (local, nao vai para o GitHub)
+CLAUDE.md
