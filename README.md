@@ -117,6 +117,90 @@ celular, use um suporte (as duas mãos livres); abra a página antes (a 1a carga
 ~25 MB); deixe o app de computador como plano B, porque a versão web depende da
 internet da sala.
 
+## 📱 App mobile (Android e iOS)
+
+Um app de celular (`app/librese/`, React Native 0.87 com TypeScript) que usa **o mesmo
+servidor e a mesma IA da versão web**: os modos ALFABETO, PALAVRAS e CALIBRADO, com
+calibração, conferência e o exemplo do sinal. Nada no servidor nem na página muda para
+o app funcionar.
+
+```
+câmera do celular → MediaPipe no celular → pontos (mãos + corpo) → WebSocket /ws → servidor (motor.py) → texto
+```
+
+- **No celular:** o módulo nativo `app/librese/modules/react-native-libres-landmarker`
+  (Swift no iOS, Kotlin no Android) roda o MediaPipe Tasks 0.10.33 em cada quadro da
+  câmera (VisionCamera v5), com os mesmos ajustes da página: modo IMAGE, confiança 0,5,
+  imagem espelhada, no máximo 640 px de largura e o corpo a cada 0,2 s. Os modelos
+  `hand_landmarker.task` e `pose_landmarker_lite.task` vão dentro do app. Como na web,
+  **só os pontos** vão para o servidor, nunca a imagem.
+- **Conversa com o servidor:** `src/servidor/ClienteLibres.ts` fala o mesmo protocolo da
+  página (`web/app.js`): manda os pontos em lotes a cada 80 ms, envia os comandos (modo,
+  limpar, apagar, calibração) e reconecta sozinho se a internet cair. Cada celular é uma
+  sessão no servidor, todos com o perfil `app` (`USUARIO_PADRAO` em `src/config.ts`): a
+  calibração feita num celular vale para os outros.
+- **Tela ao vivo** (`src/screens/AoVivoScreen.tsx`, botão TRADUZIR da tela inicial): a
+  câmera em tela cheia, os modos no topo, a letra do momento com a confiança, o texto
+  traduzido, as 3 opções mais prováveis e os botões Apagar e Limpar. No modo CALIBRADO,
+  mostra a palavra da vez, quantos exemplos já foram feitos e os botões da calibração
+  (anterior, próxima, ver como faz, desfazer, refazer e terminar). O topo mostra
+  **"conectado · N ms"**, o tempo que o MediaPipe leva em cada quadro.
+- **Servidor:** `src/config.ts` aponta para o Railway
+  (`https://libre-se-web-production.up.railway.app`). Para testar com o servidor no
+  computador, troque por `http://<IP do computador>:8000` (veja abaixo).
+
+**Estado:** compila no Android (debug e release) e no iOS (simulador, Xcode 27.2), e abre
+na tela inicial. **Ainda não foi testado num celular de verdade:** o simulador do iOS não
+tem câmera, e no emulador Android de Mac com chip Apple o MediaPipe fecha o app (erro
+SIGILL, limitação do emulador). Falta conferir no aparelho se o espelhamento dos pontos
+bate com o da página: se a página acerta uma letra e o app erra sempre, o espelhamento
+está trocado.
+
+**Gerar o APK (Android)** — node 22 ou mais novo, Android SDK e JDK 17:
+
+```bash
+cd app/librese
+npm install
+cd android && ./gradlew assembleRelease
+# o APK sai em android/app/build/outputs/apk/release/app-release.apk
+```
+
+O APK é assinado com a chave de debug (dá para instalar direto no celular, não serve para a
+Play Store) e não precisa do computador ligado. Para rodar com o celular no cabo e
+recarregar o código na hora: `npx react-native run-android` (com o `npx react-native start`
+aberto).
+
+**iPhone** — Xcode 27 e CocoaPods:
+
+```bash
+cd app/librese
+npm install
+cd ios && pod install
+```
+
+Abra `ios/librese.xcworkspace` no Xcode, escolha o seu Apple ID em *Signing & Capabilities*
+(a conta gratuita serve) e rode com o iPhone no cabo. O `Podfile` já sobe as bibliotecas para
+o iOS 15 (o mínimo do Xcode 27) e corrige o link do MediaPipe, que vem com o `Info.plist`
+apontando para `.a` em vez de `.framework`.
+
+**Com o servidor no computador** (celular e computador na mesma rede):
+
+```bash
+uvicorn servidor.app:app --host 0.0.0.0 --port 8000   # --host 0.0.0.0: o celular precisa achar o computador
+ipconfig getifaddr en0                                 # o IP do computador (Mac)
+```
+
+Troque `SERVIDOR_URL` em `app/librese/src/config.ts` por `http://<IP>:8000` e gere o app de
+novo. Se o servidor pedir código (`LIBRES_CODIGO`), coloque-o em `CODIGO_ACESSO` no mesmo
+arquivo.
+
+**Se der problema:** app fechando no Android, com o celular no cabo:
+`adb logcat -b crash`. Sem conexão, o topo da tela diz o motivo (sem conexão, servidor
+cheio, código de acesso errado).
+
+As telas antigas de foto e vídeo (`CameraScreen.tsx` e `TranslationScreen.tsx`) continuam
+no código, mas a tela inicial não leva mais a elas, e a tradução delas ainda é simulada.
+
 ## 🖥️ Usando o app (`libras_camera.py`)
 
 A janela tem a câmera (só com os pontos da mão) e, ao lado, um **painel escuro**
@@ -594,6 +678,8 @@ abaixe a mão.
 - **Modo CALIBRADO**: palavras do dia a dia (oi, bom dia, números...) com exemplos da própria
   pessoa; o que não parece com nenhum exemplo vira "não reconhecido"
 - **Versão web** (computador e celular): a página roda o MediaPipe e manda só os pontos ao servidor
+- **App mobile** (Android e iOS): roda o MediaPipe no celular e usa o mesmo servidor e a mesma
+  IA da versão web, mandando só os pontos
 - **Texto → fala** na web (botão Falar)
 - Ferramentas para o TCC: avaliação com pessoa fora do treino (LOSO), diagnóstico das bases,
   `ver_sinais.py` (confusões e figuras) e `reproduzir_trecho.py` (erros ao vivo, tecla S)
@@ -622,6 +708,9 @@ Libre-se/
 ├── servidor/                 # Versão web: app.py (FastAPI + WebSocket), motor.py (os 3 modos),
 │                             #   preparar_web.py, fixar_versoes.py, requirements*.txt
 ├── web/                      # Versão web: a página (index.html, app.js, estilo.css)
+├── app/librese/              # App mobile (React Native): telas em src/screens, conversa com o
+│                             #   servidor em src/servidor, MediaPipe nativo em
+│                             #   modules/react-native-libres-landmarker
 ├── Dockerfile                # Imagem da versão web (Railway ou qualquer Docker)
 ├── test_camera_temporal.py    # Inferência em tempo real com webcam (antigo)
 ├── collect_signs.py           # Coleta de sinais via webcam (A-Z, 1-10)
