@@ -203,3 +203,16 @@ dialog .botoes .principal { background: var(--cal); border-color: var(--cal); co
 #roteiro { font-size: .85rem; line-height: 1.4; }
 #roteiro .tarefa { color: var(--cal); font-weight: 600; }
 #perfil.pesquisa { cursor: pointer; }
+
+/* guia do alfabeto */
+#dlg-alfabeto { width: min(96vw, 900px); }
+#alfa-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px;
+  max-height: min(62vh, 640px); overflow-y: auto; padding: 2px; }
+.alfa-item { background: var(--fundo); border: 1px solid var(--linha); border-radius: 10px; padding: 6px 4px 8px;
+  text-align: center; }
+.alfa-item.atual { border-color: var(--cal); box-shadow: 0 0 0 1px var(--cal) inset; }
+.alfa-item canvas { width: 100%; aspect-ratio: 1; display: block; }
+.alfa-item b { display: block; font-size: 1.15rem; margin-top: 2px; }
+.alfa-item small { display: block; color: var(--suave); font-size: .72rem; line-height: 1.25; margin-top: 2px; }
+.alfa-fonte { font-size: .75rem; margin-top: 10px; }
+.botao-alfa { margin-top: 8px; }

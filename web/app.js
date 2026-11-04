@@ -627,6 +627,8 @@ function desenharAgora(e) {
         a.movendo ? el("span", { class: "medio atencao", text: "  movimento…" }) : null));
       f.push(el("div", { class: "suave linha", text: (a.top || []).map(([l, c]) => `${l} ${pct(c)}`).join("   ") }));
     } else f.push(el("div", { class: "suave", text: "mostre a mão" }));
+    f.push(el("button", { type: "button", class: "botao-link botao-alfa", "data-alfabeto": "1",
+      text: "Ver o alfabeto (A)" }));
   } else if (e.modo === "CALIBRADO" && e.cal && e.cal.calibrando) {
     const c = e.cal;
     f.push(el("div", { class: "rotulo" }, el("span", { text: `Calibração — palavra ${c.idx + 1} de ${c.total}` })));
@@ -836,7 +838,8 @@ ui.acoes.addEventListener("click", (ev) => {
   const b = ev.target.closest("button[data-cmd]");
   if (b) comando(b.dataset.cmd);
 });
-ui.agora.addEventListener("click", (ev) => {          // "Como se faz? (V)" do painel da calibracao
+ui.agora.addEventListener("click", (ev) => {          // "Como se faz? (V)" e "Ver o alfabeto" do painel
+  if (ev.target.closest("[data-alfabeto]")) { abrirAlfabeto(); return; }
   const b = ev.target.closest("button[data-cmd]");
   if (b) comando(b.dataset.cmd);
 });
@@ -963,11 +966,62 @@ function abrirLuz() {
   ui.dlgLuz.showModal();
 }
 
+// ------------------------------------------------------------------ guia do alfabeto
+// a mao tipica de cada letra (web/alfabeto.json: 21 pontos x/y normalizados, como no espelho do app)
+const DEDOS = [[[0, 1, 2, 3, 4], "#f2a65a"], [[5, 6, 7, 8], "#5adc5a"], [[9, 10, 11, 12], "#00c8ff"],
+  [[13, 14, 15, 16], "#be6ec8"], [[17, 18, 19, 20], "#ffd166"]];
+let ALFABETO = null;
+async function abrirAlfabeto() {
+  const d = $("#dlg-alfabeto");
+  if (!ALFABETO) {
+    try { ALFABETO = await (await fetch("alfabeto.json")).json(); }
+    catch { aviso("não consegui abrir o guia do alfabeto", true); return; }
+    const grade = $("#alfa-grade");
+    for (const [letra, v] of Object.entries(ALFABETO)) {
+      const cv = el("canvas", { width: 160, height: 160, "aria-hidden": "true" });
+      grade.append(el("div", { class: "alfa-item", "data-letra": letra }, cv,
+        el("b", { text: letra + (v.mov ? " ↻" : "") }), v.mov ? el("small", { text: v.mov }) : null));
+      desenharLetra(cv, v.p);
+    }
+  }
+  const atual = S.est && S.est.alfa && S.est.alfa.letra;
+  let alvo = null;
+  for (const it of $("#alfa-grade").children) {
+    it.classList.toggle("atual", it.dataset.letra === atual);
+    if (it.dataset.letra === atual) alvo = it;
+  }
+  if (!d.open) d.showModal();
+  if (alvo) alvo.scrollIntoView({ block: "nearest" });
+}
+function desenharLetra(cv, p) {
+  const g = cv.getContext("2d"), W = cv.width, H = cv.height;
+  const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const esc = 0.8 * Math.min(W / Math.max(x1 - x0, 1e-3), H / Math.max(y1 - y0, 1e-3));
+  const P = p.map(([x, y]) => [W / 2 + (x - (x0 + x1) / 2) * esc, H / 2 + (y - (y0 + y1) / 2) * esc]);
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = "rgba(240,240,240,0.12)"; g.strokeStyle = "rgba(240,240,240,0.55)"; g.lineWidth = 2;
+  g.beginPath();
+  [0, 1, 5, 9, 13, 17].forEach((i, k) => (k ? g.lineTo(...P[i]) : g.moveTo(...P[i])));
+  g.closePath(); g.fill(); g.stroke();
+  g.lineCap = "round"; g.lineJoin = "round";
+  for (const [cadeia, cor] of DEDOS) {
+    g.strokeStyle = cor; g.lineWidth = 6;
+    g.beginPath();
+    cadeia.forEach((i, k) => (k ? g.lineTo(...P[i]) : g.moveTo(...P[i])));
+    g.stroke();
+    g.fillStyle = cor;
+    const [x, y] = P[cadeia[cadeia.length - 1]];
+    g.beginPath(); g.arc(x, y, 5, 0, 2 * Math.PI); g.fill();
+  }
+}
+$("#btn-alfabeto").addEventListener("click", abrirAlfabeto);
+
 function comoSeFaz() {                               // tecla H: o sinal da vez no dicionario
   const e = S.est || {};
+  if (e.modo === "ALFABETO") { abrirAlfabeto(); return; }   // o guia do proprio app
   let url = DICIONARIO_INES;
-  if (e.modo === "ALFABETO") url = DICIONARIO_ALFABETO;
-  else if (e.cal && e.cal.calibrando && e.cal.palavra) url = linkDicionario(e.cal.palavra);
+  if (e.cal && e.cal.calibrando && e.cal.palavra) url = linkDicionario(e.cal.palavra);
   else if (e.ultimo && (e.ultimo.ok || e.ultimo.melhor)) url = linkDicionario(e.ultimo.ok || e.ultimo.melhor);
   window.open(url, "_blank", "noopener");
 }
@@ -978,7 +1032,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.target && ["INPUT", "TEXTAREA", "SELECT"].includes(ev.target.tagName)) return;
   const k = ev.key.toLowerCase();
   const mapa = { m: () => comando("modo"), " ": () => comando("limpar"), backspace: () => comando("apagar"),
-    c: trocarCamera, f: telaCheia, h: comoSeFaz, l: abrirLuz };
+    c: trocarCamera, f: telaCheia, h: comoSeFaz, l: abrirLuz, a: abrirAlfabeto };
   if (mapa[k]) { ev.preventDefault(); mapa[k](); return; }
   if (S.modo === "CALIBRADO" && "kvnprd".includes(k) && k.length === 1) { ev.preventDefault(); comando(k); }
 });
