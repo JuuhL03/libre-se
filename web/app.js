@@ -968,8 +968,6 @@ function abrirLuz() {
 
 // ------------------------------------------------------------------ guia do alfabeto
 // a mao tipica de cada letra (web/alfabeto.json: 21 pontos x/y normalizados, como no espelho do app)
-const DEDOS = [[[0, 1, 2, 3, 4], "#f2a65a"], [[5, 6, 7, 8], "#5adc5a"], [[9, 10, 11, 12], "#00c8ff"],
-  [[13, 14, 15, 16], "#be6ec8"], [[17, 18, 19, 20], "#ffd166"]];
 let ALFABETO = null;
 async function abrirAlfabeto() {
   const d = $("#dlg-alfabeto");
@@ -979,9 +977,9 @@ async function abrirAlfabeto() {
     const grade = $("#alfa-grade");
     for (const [letra, v] of Object.entries(ALFABETO)) {
       const cv = el("canvas", { width: 160, height: 160, "aria-hidden": "true" });
-      grade.append(el("div", { class: "alfa-item", "data-letra": letra }, cv,
+      grade.append(el("div", { class: "alfa-item" + (v.mov ? " mov" : ""), "data-letra": letra }, cv,
         el("b", { text: letra + (v.mov ? " ↻" : "") }), v.mov ? el("small", { text: v.mov }) : null));
-      desenharLetra(cv, v.p);
+      desenharLetra(cv, v.p, letra);
     }
   }
   const atual = S.est && S.est.alfa && S.est.alfa.letra;
@@ -993,27 +991,60 @@ async function abrirAlfabeto() {
   if (!d.open) d.showModal();
   if (alvo) alvo.scrollIntoView({ block: "nearest" });
 }
-function desenharLetra(cv, p) {
+// desenho proprio, estilo "luva": cada osso dos dedos e um tubo com contorno, a palma um
+// poligono; tudo desenhado do mais longe para o mais perto da camera (z do MediaPipe), para
+// que os dedos dobrados de uma mao fechada (A, E, S) aparecam por cima da palma
+const OSSOS = [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12],
+  [13, 14], [14, 15], [15, 16], [17, 18], [18, 19], [19, 20]];
+const PALMA = [0, 1, 5, 9, 13, 17];
+const COR_LUVA = "#f7f3ea", COR_TRACO = "#1d1d1d", COR_SETA = "#e2603a";
+function desenharLetra(cv, p, letra) {
   const g = cv.getContext("2d"), W = cv.width, H = cv.height;
   const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const esc = 0.8 * Math.min(W / Math.max(x1 - x0, 1e-3), H / Math.max(y1 - y0, 1e-3));
-  const P = p.map(([x, y]) => [W / 2 + (x - (x0 + x1) / 2) * esc, H / 2 + (y - (y0 + y1) / 2) * esc]);
+  const esc = 0.7 * Math.min(W / Math.max(x1 - x0, 1e-3), H / Math.max(y1 - y0, 1e-3));
+  const P = p.map(([x, y, z]) => [W / 2 + (x - (x0 + x1) / 2) * esc, H / 2 + 6 + (y - (y0 + y1) / 2) * esc, z || 0]);
+  const larg = (i) => esc * (i <= 4 ? 0.27 : i >= 17 ? 0.2 : 0.235);   // grossura de cada dedo
   g.clearRect(0, 0, W, H);
-  g.fillStyle = "rgba(240,240,240,0.12)"; g.strokeStyle = "rgba(240,240,240,0.55)"; g.lineWidth = 2;
-  g.beginPath();
-  [0, 1, 5, 9, 13, 17].forEach((i, k) => (k ? g.lineTo(...P[i]) : g.moveTo(...P[i])));
-  g.closePath(); g.fill(); g.stroke();
   g.lineCap = "round"; g.lineJoin = "round";
-  for (const [cadeia, cor] of DEDOS) {
-    g.strokeStyle = cor; g.lineWidth = 6;
-    g.beginPath();
-    cadeia.forEach((i, k) => (k ? g.lineTo(...P[i]) : g.moveTo(...P[i])));
-    g.stroke();
-    g.fillStyle = cor;
-    const [x, y] = P[cadeia[cadeia.length - 1]];
-    g.beginPath(); g.arc(x, y, 5, 0, 2 * Math.PI); g.fill();
+  const pecas = [{ z: PALMA.reduce((t, i) => t + P[i][2], 0) / PALMA.length + 0.02, f: () => {
+    g.beginPath(); PALMA.forEach((i, k) => (k ? g.lineTo(P[i][0], P[i][1]) : g.moveTo(P[i][0], P[i][1])));
+    g.closePath();
+    g.lineWidth = esc * 0.3 + 5; g.strokeStyle = COR_TRACO; g.stroke();
+    g.lineWidth = esc * 0.3; g.strokeStyle = COR_LUVA; g.stroke();
+    g.fillStyle = COR_LUVA; g.fill();
+  } }];
+  for (const [a, b] of OSSOS) {
+    pecas.push({ z: (P[a][2] + P[b][2]) / 2, f: () => {
+      const w = larg(b);
+      g.beginPath(); g.moveTo(P[a][0], P[a][1]); g.lineTo(P[b][0], P[b][1]);
+      g.lineWidth = w + 5; g.strokeStyle = COR_TRACO; g.stroke();
+      g.lineWidth = w; g.strokeStyle = COR_LUVA; g.stroke();
+    } });
   }
+  pecas.sort((u, v) => v.z - u.z).forEach((x) => x.f());     // z maior = mais longe: primeiro
+  seta(g, letra, P, esc);
+}
+function seta(g, letra, P, esc) {
+  // setas do movimento (H, J, K, X, Z), desenhadas a partir da ponta do dedo que conduz o gesto
+  const pt = { H: 12, J: 20, K: 12, X: 8, Z: 8 }[letra];
+  if (pt === undefined) return;
+  const [x, y] = P[pt], r = esc * 0.55;
+  const cam = {
+    H: [[x - r, y - r * 0.4], [x, y - r], [x + r, y - r * 0.4]],
+    J: [[x + r * 0.2, y - r * 0.3], [x + r * 0.2, y + r * 0.8], [x - r * 0.6, y + r * 0.9], [x - r * 0.8, y + r * 0.4]],
+    K: [[x + r * 0.9, y + r * 0.9], [x + r * 0.9, y - r * 0.7]],
+    X: [[x - r * 0.4, y + r * 0.9], [x + r * 0.9, y + r * 0.9]],
+    Z: [[x - r, y - r * 1.1], [x + r * 0.6, y - r * 1.1], [x - r, y - r * 0.2], [x + r * 0.6, y - r * 0.2]],
+  }[letra];
+  g.strokeStyle = COR_SETA; g.fillStyle = COR_SETA; g.lineWidth = 4; g.setLineDash([7, 5]);
+  g.beginPath(); cam.forEach(([a, b], k) => (k ? g.lineTo(a, b) : g.moveTo(a, b))); g.stroke();
+  g.setLineDash([]);
+  const [ax, ay] = cam[cam.length - 2], [bx, by] = cam[cam.length - 1];
+  const ang = Math.atan2(by - ay, bx - ax), t = 12;
+  g.beginPath(); g.moveTo(bx, by);
+  g.lineTo(bx - t * Math.cos(ang - 0.5), by - t * Math.sin(ang - 0.5));
+  g.lineTo(bx - t * Math.cos(ang + 0.5), by - t * Math.sin(ang + 0.5)); g.closePath(); g.fill();
 }
 $("#btn-alfabeto").addEventListener("click", abrirAlfabeto);
 
