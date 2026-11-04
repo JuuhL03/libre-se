@@ -28,7 +28,7 @@ import numpy as np
 from libres_modelos import carregar_modelo
 from libres_features import (FEAT_DIM, FEATURE_VERSION, N_COORDS, N_LANDMARKS,
                              alphabet_features, mirror_raw, eh_y, familia_forma, forma_mao,
-                             letra_urv,
+                             letra_urv, letra_ase,
                              compute_enhanced_features, normalize_landmarks,
                              normalize_sequence)
 
@@ -394,6 +394,9 @@ class LetterRecognizer:
 
 # Letras com movimento no alfabeto manual da Libras (H, J, K, X, Z).
 LETRAS_DINAMICAS = {"H", "J", "K", "X", "Z"}
+# letras paradas que podem ser o comeco (ou o meio) de um Z ou de um X: o indicador sozinho
+BASES_ZX = {"D", "G", "P", "Q", "X", "Z", "I"}
+BASES_HK = {"H", "K", "U", "V", "R"}      # indicador e medio levantados
 
 
 class _Segmento:
@@ -562,12 +565,20 @@ class _Segmento:
         forma = self.predominio(0.6, i, j)
         if forma == "I":
             return "J" if anda else None
+        # a letra que o modelo parado ve na maior parte do gesto
+        from collections import Counter
+        est = [e for e in self.estaticas[i:j + 1] if e]
+        dom, n_dom = Counter(est).most_common(1)[0] if est else (None, 0)
+        dom = dom if n_dom >= 0.5 * max(len(est), 1) else None
+        if forma == "IND" and m["kh"] >= 0.5 and (dom is None or dom in BASES_HK | BASES_ZX):
+            forma = "DOIS"           # o modelo ve K/H: indicador e medio, e o K subindo
         if forma == "IND":
             if not (anda or recua):
                 return None
-            # o modelo parado ve um L na maior parte do gesto (polegar aberto que a regra
-            # de forma nao pegou): e a mao em L se mexendo, nao Z nem X
-            if np.mean([e == "L" for e in self.estaticas[i:j + 1]]) >= 0.5:
+            # o modelo parado ve, na maior parte do gesto, uma letra que nao e a base do
+            # Z nem do X (L, A, S, E, N, K...): e essa mao se mexendo, nao Z nem X. Uma mao
+            # fechada as vezes parece "indicador em gancho", e o L, "so o indicador"
+            if dom is not None and dom not in BASES_ZX:
                 return None
             if m["inv_x"] >= 2 and m["dy"] >= 0.3 * m["dx"] and m["gancho"] < 0.5:
                 return "Z"
@@ -675,6 +686,13 @@ class Soletrador:
             urv = letra_urv(raw)
             if urv:
                 return urv, fam
+        if letra in ("A", "S", "E"):
+            # mao fechada: o modelo confunde A, S e E; quem decide e o polegar
+            prob = {l: c for l, c in top}
+            fam = sum(prob.get(l, 0.0) for l in ("A", "S", "E"))
+            ase = letra_ase(raw, prob.get("S", 0.0), prob.get("E", 0.0))
+            if ase:
+                return ase, fam
         return letra, conf
 
     def _emitir(self, letra: str, t: float, dinamica: bool, base: Optional[set],

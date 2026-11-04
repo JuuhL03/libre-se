@@ -329,6 +329,32 @@ def letra_urv(raw: np.ndarray) -> str | None:
     return None
 
 
+def polegar_ase(raw: np.ndarray) -> tuple[float, float]:
+    """Onde esta o polegar numa mao fechada: (t, d). t = posicao da ponta do polegar
+    ao longo da linha indicador -> minimo (base dos dedos): no A ele fica AO LADO do
+    indicador (t < 0); no S e no E, na frente dos dedos (t ~ 0,5). d = distancia da
+    ponta do polegar a 2a articulacao do medio, em tamanhos de mao: no S o polegar
+    cruza o meio dos dedos (d pequeno); no E fica embaixo das pontas (d maior)."""
+    a = np.asarray(raw, dtype=np.float64).reshape(N_LANDMARKS, N_COORDS)
+    tam = max(float(np.linalg.norm(a[9] - a[0])), 1e-9)
+    v = a[17] - a[5]
+    t = float(np.dot(a[4] - a[5], v) / max(float(np.dot(v, v)), 1e-12))
+    return t, float(np.linalg.norm(a[4] - a[10])) / tam
+
+
+def letra_ase(raw: np.ndarray, p_s: float = 0.0, p_e: float = 0.0) -> str | None:
+    """Desempata A / S / E pelo polegar (None = deixa para o modelo). Treinando sem uma
+    das fontes de fotos e testando nela (pessoas que o modelo nunca viu): A de 52-100%
+    para 89-100%, S de 4-37% para 60-99%, E de 54-64% para 57-89%."""
+    g = geometria_mao(raw)
+    if any(g["esticado"][d] for d in ("indicador", "medio", "anelar", "minimo")):
+        return None
+    t, d = polegar_ase(raw)
+    if t < 0.05:
+        return "A"
+    return "S" if d < 0.46 else "E"
+
+
 def eh_y(raw: np.ndarray) -> bool:
     """Y: minimo reto, polegar para fora, indicador/medio/anelar bem dobrados.
     Nos datasets: 100% de precisao, pega 92% dos Y (o modelo sozinho: 0%)."""
