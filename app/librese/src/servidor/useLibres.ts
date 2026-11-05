@@ -116,7 +116,14 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
     [],
   );
 
-  const avisarErro = useCallback((m: string) => setErro(`detector: ${m}`), []);
+  // o erro nativo chega com o stack trace do Java junto: na tela vai so a 1a linha (a causa),
+  // e o texto inteiro vai para o log (adb logcat / Metro)
+  const avisarErro = useCallback((m: string) => {
+    console.warn(`[libres] detector: ${m}`);
+    const linha =
+      m.split('\n').find(l => l.trim() && !/^\s*at\s/.test(l)) ?? m;
+    setErro(`detector: ${linha.trim().slice(0, 200)}`);
+  }, []);
 
   // 4. o frame processor: MediaPipe nativo em cada quadro da camera
   const comPose = deteccao === 'v3';

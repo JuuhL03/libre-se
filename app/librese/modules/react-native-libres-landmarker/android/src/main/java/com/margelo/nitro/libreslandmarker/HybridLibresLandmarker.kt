@@ -79,7 +79,8 @@ class HybridLibresLandmarker : HybridLibresLandmarkerSpec() {
     pixels: ArrayBuffer, w: Int, h: Int, bpr: Int, formato: String, orientacao: String, espelhar: Boolean,
   ): Bitmap {
     val buf: ByteBuffer = pixels.getBuffer(false).order(ByteOrder.nativeOrder())
-    require(w > 0 && h > 0 && bpr >= w * 4 && buf.capacity() >= bpr * h) {
+    // a ultima linha costuma vir sem o preenchimento (Image.Plane do Android): basta bpr*(h-1) + w*4
+    require(w > 0 && h > 0 && bpr >= w * 4 && buf.capacity() >= bpr.toLong() * (h - 1) + w * 4L) {
       "quadro invalido (${w}x$h, $bpr bytes por linha, ${buf.capacity()} bytes)"
     }
     val bgra = formato.contains("bgra")
