@@ -15,6 +15,7 @@ import {
   ClienteLibres,
   type Conexao,
   type EstadoLibres,
+  type ExemploSinal,
   type InfoLibres,
   type Modo,
   type Quadro,
@@ -38,6 +39,10 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
   const [erro, setErro] = useState<string | null>(null);
   const [maoVisivel, setMaoVisivel] = useState(false);
   const [msDeteccao, setMsDeteccao] = useState(0);
+  // "Ver como faz": o exemplo que o servidor mandou e quando chegou (a animacao conta dali)
+  const [exemplo, setExemplo] = useState<
+    (ExemploSinal & { recebidoEm: number }) | null
+  >(null);
 
   const landmarker = useMemo(() => criarLandmarker(), []);
   const clienteRef = useRef<ClienteLibres | null>(null);
@@ -64,6 +69,7 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
           setErro(null);
         },
         estado: e => setEstado(e),
+        exemplo: ex => setExemplo({ ...ex, recebidoEm: Date.now() }),
         erro: m => setErro(m),
       },
       usuario,
@@ -75,6 +81,11 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
       clienteRef.current = null;
     };
   }, [ativo, usuario]);
+
+  // trocou de modo: o exemplo que estava passando sai (como na web)
+  useEffect(() => {
+    setExemplo(null);
+  }, [modo]);
 
   // 2. numero de maos do detector conforme o modo (1 no alfabeto, como o landmarker do app)
   useEffect(() => {
@@ -206,6 +217,8 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
     maoVisivel,
     msDeteccao,
     deteccao,
+    exemplo,
+    fecharExemplo: () => setExemplo(null),
     comando,
     trocarModo,
   };

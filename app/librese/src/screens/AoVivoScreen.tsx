@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +22,8 @@ import {
 import { Svg, Path } from 'react-native-svg';
 import { useLibres } from '../servidor/useLibres';
 import type { Modo } from '../servidor/ClienteLibres';
+import ExemploSinal from '../components/ExemploSinal';
+import { linkComoSeFaz } from '../dicionario';
 
 const INK = '#12172B';
 const PARCHMENT = '#F5F1E8';
@@ -161,6 +164,11 @@ export default function AoVivoScreen({ onBack }: Props) {
   const top = estado?.ultimo?.top ?? [];
   const aviso = estado?.aviso || cal?.msg || null;
 
+  // "Como se faz?": abre o video do sinal no dicionario de Libras (navegador do celular)
+  const comoSeFaz = () => {
+    Linking.openURL(linkComoSeFaz(estado ?? null)).catch(() => {});
+  };
+
   return (
     <View style={styles.tela}>
       <Camera
@@ -233,6 +241,11 @@ export default function AoVivoScreen({ onBack }: Props) {
         )}
       </View>
 
+      {/* "Ver como faz": o exemplo do sinal (maos e corpo) passando no canto */}
+      {libres.exemplo && (
+        <ExemploSinal exemplo={libres.exemplo} onFim={libres.fecharExemplo} />
+      )}
+
       {/* painel de baixo: texto traduzido, ultimo sinal e acoes */}
       <View style={[styles.painel, { paddingBottom: insets.bottom + 12 }]}>
         {(libres.erro || aviso) && (
@@ -252,6 +265,9 @@ export default function AoVivoScreen({ onBack }: Props) {
           <View style={styles.calibracao}>
             <Text style={styles.calTitulo}>CALIBRANDO</Text>
             <Text style={styles.calPalavra}>{nomeSinal(cal.palavra)}</Text>
+            <Pressable onPress={comoSeFaz} hitSlop={8}>
+              <Text style={styles.link}>Como se faz? (vídeo no dicionário)</Text>
+            </Pressable>
             <Text style={styles.calProgresso}>
               {cal.n ?? 0} de {cal.rep} exemplos · palavra {(cal.idx ?? 0) + 1}{' '}
               de {cal.total}
@@ -296,6 +312,7 @@ export default function AoVivoScreen({ onBack }: Props) {
             <View style={styles.linhaBotoes}>
               <Botao texto="Apagar" onPress={() => libres.comando('apagar')} />
               <Botao texto="Limpar" onPress={() => libres.comando('limpar')} />
+              <Botao texto="Como se faz?" onPress={comoSeFaz} />
               {estado?.modo === 'CALIBRADO' && (
                 <Botao
                   texto={cal?.tem_reconhecedor ? 'Calibrar mais' : 'Calibrar'}
@@ -408,6 +425,7 @@ const styles = StyleSheet.create({
   top: { color: 'rgba(245,241,232,0.6)', fontSize: 12, marginTop: 8 },
   linhaBotoes: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     marginTop: 12,
     gap: 8,
@@ -432,4 +450,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   calProgresso: { color: 'rgba(245,241,232,0.7)', fontSize: 13, marginTop: 4 },
+  link: {
+    color: GOLD,
+    fontSize: 13,
+    textDecorationLine: 'underline',
+    marginTop: 4,
+  },
 });
