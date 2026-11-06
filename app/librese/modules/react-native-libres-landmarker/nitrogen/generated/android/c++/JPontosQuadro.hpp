@@ -10,6 +10,7 @@
 #include <fbjni/fbjni.h>
 #include "PontosQuadro.hpp"
 
+#include <string>
 #include <vector>
 
 namespace margelo::nitro::libreslandmarker {
@@ -43,6 +44,14 @@ namespace margelo::nitro::libreslandmarker {
       double altura = this->getFieldValue(fieldAltura);
       static const auto fieldMs = clazz->getField<double>("ms");
       double ms = this->getFieldValue(fieldMs);
+      static const auto fieldMsImagem = clazz->getField<double>("msImagem");
+      double msImagem = this->getFieldValue(fieldMsImagem);
+      static const auto fieldMsMaos = clazz->getField<double>("msMaos");
+      double msMaos = this->getFieldValue(fieldMsMaos);
+      static const auto fieldMsCorpo = clazz->getField<double>("msCorpo");
+      double msCorpo = this->getFieldValue(fieldMsCorpo);
+      static const auto fieldProcessamento = clazz->getField<jni::JString>("processamento");
+      jni::local_ref<jni::JString> processamento = this->getFieldValue(fieldProcessamento);
       return PontosQuadro(
         [&]() {
           size_t __size = maos->size();
@@ -64,7 +73,11 @@ namespace margelo::nitro::libreslandmarker {
         }(),
         largura,
         altura,
-        ms
+        ms,
+        msImagem,
+        msMaos,
+        msCorpo,
+        processamento->toStdString()
       );
     }
 
@@ -74,7 +87,7 @@ namespace margelo::nitro::libreslandmarker {
      */
     [[maybe_unused]]
     static jni::local_ref<JPontosQuadro::javaobject> fromCpp(const PontosQuadro& value) {
-      using JSignature = JPontosQuadro(jni::alias_ref<jni::JArrayDouble>, jni::alias_ref<jni::JArrayDouble>, jni::alias_ref<jni::JArrayDouble>, double, double, double);
+      using JSignature = JPontosQuadro(jni::alias_ref<jni::JArrayDouble>, jni::alias_ref<jni::JArrayDouble>, jni::alias_ref<jni::JArrayDouble>, double, double, double, double, double, double, jni::alias_ref<jni::JString>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -99,7 +112,11 @@ namespace margelo::nitro::libreslandmarker {
         }(),
         value.largura,
         value.altura,
-        value.ms
+        value.ms,
+        value.msImagem,
+        value.msMaos,
+        value.msCorpo,
+        jni::make_jstring(value.processamento)
       );
     }
   };

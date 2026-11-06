@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +22,8 @@ import {
 import { Svg, Path } from 'react-native-svg';
 import { useLibres } from '../servidor/useLibres';
 import type { Modo } from '../servidor/ClienteLibres';
+import ExemploSinal from '../components/ExemploSinal';
+import { linkComoSeFaz } from '../dicionario';
 
 const INK = '#12172B';
 const PARCHMENT = '#F5F1E8';
@@ -159,7 +162,12 @@ export default function AoVivoScreen({ onBack }: Props) {
   const cal = estado?.modo === 'CALIBRADO' ? estado.cal : undefined;
   const alfa = estado?.modo === 'ALFABETO' ? estado.alfa : undefined;
   const top = estado?.ultimo?.top ?? [];
-  const aviso = estado?.aviso || cal?.msg || null;
+  const aviso = libres.avisoApp || estado?.aviso || cal?.msg || null;
+
+  // "Como se faz?": abre o video do sinal no dicionario de Libras (navegador do celular)
+  const comoSeFaz = () => {
+    Linking.openURL(linkComoSeFaz(estado ?? null)).catch(() => {});
+  };
 
   return (
     <View style={styles.tela}>
@@ -169,6 +177,18 @@ export default function AoVivoScreen({ onBack }: Props) {
         isActive
         outputs={[libres.frameOutput]}
       />
+
+      {/* preparando: na 1a vez o MediaPipe carrega os modelos e prepara a GPU (alguns
+          segundos), e de novo ao trocar alfabeto <-> palavras. Some no 1o quadro detectado. */}
+      {!libres.pronto && !libres.erro && (
+        <View style={styles.preparando} pointerEvents="none">
+          <ActivityIndicator size="large" color={GOLD} />
+          <Text style={styles.preparandoTitulo}>Preparando o reconhecimento…</Text>
+          <Text style={styles.preparandoTexto}>
+            Na primeira vez pode levar alguns segundos.
+          </Text>
+        </View>
+      )}
 
       {/* topo: voltar, conexao, trocar camera */}
       <View style={[styles.topo, { paddingTop: insets.top + 8 }]}>
@@ -182,12 +202,18 @@ export default function AoVivoScreen({ onBack }: Props) {
               { backgroundColor: conexao === 'conectado' ? '#5FBF77' : RED },
             ]}
           />
-          <Text style={styles.statusTexto}>
-            {textoConexao}
-            {conexao === 'conectado' && libres.msDeteccao
-              ? ` · ${libres.msDeteccao} ms`
-              : ''}
-          </Text>
+          <View>
+            <Text style={styles.statusTexto}>{textoConexao}</Text>
+            {/* so no modo de desenvolvimento (npx react-native run-android): de onde vem
+                o tempo de cada quadro. No APK de release nao aparece. */}
+            {__DEV__ && conexao === 'conectado' && libres.diag ? (
+              <Text style={styles.statusDetalhe}>
+                {libres.diag.qps} q/s · {libres.diag.processamento} · imagem{' '}
+                {libres.diag.msImagem} · mãos {libres.diag.msMaos} · corpo{' '}
+                {libres.diag.msCorpo} ms
+              </Text>
+            ) : null}
+          </View>
         </View>
         <TouchableOpacity
           style={styles.icone}
@@ -233,6 +259,11 @@ export default function AoVivoScreen({ onBack }: Props) {
         )}
       </View>
 
+      {/* "Ver como faz": o exemplo do sinal (maos e corpo) passando no canto */}
+      {libres.exemplo && (
+        <ExemploSinal exemplo={libres.exemplo} onFim={libres.fecharExemplo} />
+      )}
+
       {/* painel de baixo: texto traduzido, ultimo sinal e acoes */}
       <View style={[styles.painel, { paddingBottom: insets.bottom + 12 }]}>
         {(libres.erro || aviso) && (
@@ -252,13 +283,16 @@ export default function AoVivoScreen({ onBack }: Props) {
           <View style={styles.calibracao}>
             <Text style={styles.calTitulo}>CALIBRANDO</Text>
             <Text style={styles.calPalavra}>{nomeSinal(cal.palavra)}</Text>
+            <Pressable onPress={comoSeFaz} hitSlop={8}>
+              <Text style={styles.link}>Como se faz? (vídeo no dicionário)</Text>
+            </Pressable>
             <Text style={styles.calProgresso}>
               {cal.n ?? 0} de {cal.rep} exemplos · palavra {(cal.idx ?? 0) + 1}{' '}
               de {cal.total}
             </Text>
             <View style={styles.linhaBotoes}>
               <Botao texto="‹" onPress={() => libres.comando('p')} />
-              <Botao texto="Ver como faz" onPress={() => libres.comando('v')} />
+              <Botao texto="Ver como faz" onPress={libres.verComoFaz} />
               <Botao texto="Desfazer" onPress={() => libres.comando('d')} />
               <Botao texto="›" onPress={() => libres.comando('n')} />
             </View>
@@ -296,6 +330,7 @@ export default function AoVivoScreen({ onBack }: Props) {
             <View style={styles.linhaBotoes}>
               <Botao texto="Apagar" onPress={() => libres.comando('apagar')} />
               <Botao texto="Limpar" onPress={() => libres.comando('limpar')} />
+              <Botao texto="Como se faz?" onPress={comoSeFaz} />
               {estado?.modo === 'CALIBRADO' && (
                 <Botao
                   texto={cal?.tem_reconhecedor ? 'Calibrar mais' : 'Calibrar'}
@@ -355,6 +390,32 @@ const styles = StyleSheet.create({
   },
   ponto: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusTexto: { color: PARCHMENT, fontSize: 13 },
+  statusDetalhe: { color: 'rgba(245,241,232,0.7)', fontSize: 10, marginTop: 1 },
+
+  preparando: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(18,23,43,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  preparandoTitulo: {
+    color: PARCHMENT,
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  preparandoTexto: {
+    color: 'rgba(245,241,232,0.7)',
+    fontSize: 13,
+    marginTop: 6,
+    textAlign: 'center',
+  },
 
   modos: {
     position: 'absolute',
@@ -408,6 +469,7 @@ const styles = StyleSheet.create({
   top: { color: 'rgba(245,241,232,0.6)', fontSize: 12, marginTop: 8 },
   linhaBotoes: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     marginTop: 12,
     gap: 8,
@@ -432,4 +494,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   calProgresso: { color: 'rgba(245,241,232,0.7)', fontSize: 13, marginTop: 4 },
+  link: {
+    color: GOLD,
+    fontSize: 13,
+    textDecorationLine: 'underline',
+    marginTop: 4,
+  },
 });

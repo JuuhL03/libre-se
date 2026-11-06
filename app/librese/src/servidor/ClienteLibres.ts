@@ -79,6 +79,28 @@ export type InfoLibres = {
   avisos?: string[];
 };
 
+/** Ponto (x, y) normalizado na imagem; null onde a mao/corpo nao foi detectado. */
+type Ponto2 = [number | null, number | null];
+
+/**
+ * Exemplo de um sinal ("Ver como faz", comando 'v'): como ele foi feito na
+ * calibracao, quadro a quadro (servidor/motor.py, preparar_exemplo).
+ */
+export type ExemploSinal = {
+  tipo: 'exemplo';
+  palavra: string;
+  indice: number; // qual dos exemplos gravados (0..n-1)
+  n: number;
+  referencia: boolean; // true: e o exemplo do perfil de referencia (a pessoa ainda nao gravou)
+  aspecto: number; // largura / altura da imagem em que foi gravado
+  fps: number;
+  dom: number; // qual das 2 maos e a dominante (0 ou 1)
+  caixa: [number, number, number, number]; // x0, y0, x1, y1 (x ja multiplicado pelo aspecto)
+  maos: [Ponto2[] | null, Ponto2[] | null][]; // (T, 2, 21, 2)
+  corpo: (Ponto2 | null)[][] | null; // (T, 9, 2), na ordem de pontos_corpo
+  pontos_corpo: number[]; // indices do MediaPipe Pose: nariz, ombros, cotovelos, punhos, quadris
+};
+
 export type Conexao =
   | 'conectando'
   | 'conectado'
@@ -90,7 +112,7 @@ type Ouvintes = {
   conexao?: (c: Conexao, detalhe?: string) => void;
   config?: (info: InfoLibres, estado: EstadoLibres) => void;
   estado?: (estado: EstadoLibres) => void;
-  exemplo?: (exemplo: Record<string, unknown>) => void;
+  exemplo?: (exemplo: ExemploSinal) => void;
   erro?: (msg: string) => void;
 };
 
@@ -203,7 +225,8 @@ export class ClienteLibres {
       if (msg.ack) this.emVoo = Math.max(0, this.emVoo - 1);
       this.ouvintes.estado?.(msg as EstadoLibres);
     } else if (msg.tipo === 'exemplo') {
-      this.ouvintes.exemplo?.(msg);
+      if (Array.isArray(msg.maos) && msg.maos.length > 0)
+        this.ouvintes.exemplo?.(msg as ExemploSinal);
     } else if (msg.tipo === 'erro') {
       this.ouvintes.erro?.(msg.msg || 'erro no servidor');
     }

@@ -191,6 +191,7 @@ class HybridLibresLandmarker: HybridLibresLandmarkerSpec {
 
     let pb = try prepararImagem(pixels, Int(largura), Int(altura), Int(bytesPorLinha), formato, orientacao, espelhar)
     let imagem = try MPImage(pixelBuffer: pb)
+    let t1 = CFAbsoluteTimeGetCurrent()
 
     var pontos: [Double] = []
     var lados: [Double] = []
@@ -201,6 +202,7 @@ class HybridLibresLandmarker: HybridLibresLandmarkerSpec {
         lados.append(nome.isEmpty ? -1 : (nome.lowercased().hasPrefix("r") ? 1 : 0))
       }
     }
+    let t2 = CFAbsoluteTimeGetCurrent()
 
     var corpo: [Double] = []
     if comPose, let rp = try pose?.detect(image: imagem), let pts = rp.landmarks.first {
@@ -209,9 +211,12 @@ class HybridLibresLandmarker: HybridLibresLandmarkerSpec {
       }
     }
 
+    let t3 = CFAbsoluteTimeGetCurrent()
+
     return PontosQuadro(
       maos: pontos, lados: lados, pose: corpo,
       largura: Double(CVPixelBufferGetWidth(pb)), altura: Double(CVPixelBufferGetHeight(pb)),
-      ms: (CFAbsoluteTimeGetCurrent() - t0) * 1000)
+      ms: (t3 - t0) * 1000, msImagem: (t1 - t0) * 1000, msMaos: (t2 - t1) * 1000,
+      msCorpo: (t3 - t2) * 1000, processamento: "CPU")
   }
 }
