@@ -46,3 +46,12 @@ listagem.txt
 
 # instrucoes do Claude Code (local, nao vai para o GitHub)
 CLAUDE.md
+
+# V-LIBRASIL (UFPE): sem direito de redistribuicao; os videos ficam so no computador
+videos UFPE*/
+videos_convertidos/
+vlibrasil*/
+*.mp4
+*.mov
+*.avi
+*.mkv
