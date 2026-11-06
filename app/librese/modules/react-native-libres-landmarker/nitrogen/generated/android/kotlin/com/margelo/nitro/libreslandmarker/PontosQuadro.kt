@@ -35,7 +35,19 @@ data class PontosQuadro(
   val altura: Double,
   @DoNotStrip
   @Keep
-  val ms: Double
+  val ms: Double,
+  @DoNotStrip
+  @Keep
+  val msImagem: Double,
+  @DoNotStrip
+  @Keep
+  val msMaos: Double,
+  @DoNotStrip
+  @Keep
+  val msCorpo: Double,
+  @DoNotStrip
+  @Keep
+  val processamento: String
 ) {
   /* primary constructor */
 
@@ -48,6 +60,10 @@ data class PontosQuadro(
       && Objects.deepEquals(this.largura, other.largura)
       && Objects.deepEquals(this.altura, other.altura)
       && Objects.deepEquals(this.ms, other.ms)
+      && Objects.deepEquals(this.msImagem, other.msImagem)
+      && Objects.deepEquals(this.msMaos, other.msMaos)
+      && Objects.deepEquals(this.msCorpo, other.msCorpo)
+      && Objects.deepEquals(this.processamento, other.processamento)
   }
 
   override fun hashCode(): Int {
@@ -57,7 +73,11 @@ data class PontosQuadro(
       pose,
       largura,
       altura,
-      ms
+      ms,
+      msImagem,
+      msMaos,
+      msCorpo,
+      processamento
     ).contentDeepHashCode()
   }
 
@@ -69,8 +89,8 @@ data class PontosQuadro(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(maos: DoubleArray, lados: DoubleArray, pose: DoubleArray, largura: Double, altura: Double, ms: Double): PontosQuadro {
-      return PontosQuadro(maos, lados, pose, largura, altura, ms)
+    private fun fromCpp(maos: DoubleArray, lados: DoubleArray, pose: DoubleArray, largura: Double, altura: Double, ms: Double, msImagem: Double, msMaos: Double, msCorpo: Double, processamento: String): PontosQuadro {
+      return PontosQuadro(maos, lados, pose, largura, altura, ms, msImagem, msMaos, msCorpo, processamento)
     }
   }
 }

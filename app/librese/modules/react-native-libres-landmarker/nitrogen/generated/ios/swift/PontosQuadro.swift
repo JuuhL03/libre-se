@@ -18,7 +18,7 @@ public extension PontosQuadro {
   /**
    * Create a new instance of `PontosQuadro`.
    */
-  init(maos: [Double], lados: [Double], pose: [Double], largura: Double, altura: Double, ms: Double) {
+  init(maos: [Double], lados: [Double], pose: [Double], largura: Double, altura: Double, ms: Double, msImagem: Double, msMaos: Double, msCorpo: Double, processamento: String) {
     self.init({ () -> bridge.std__vector_double_ in
       var __vector = bridge.create_std__vector_double_(maos.count)
       for __item in maos {
@@ -37,7 +37,7 @@ public extension PontosQuadro {
         __vector.push_back(__item)
       }
       return __vector
-    }(), largura, altura, ms)
+    }(), largura, altura, ms, msImagem, msMaos, msCorpo, std.string(processamento))
   }
 
   @inline(__always)
@@ -68,5 +68,25 @@ public extension PontosQuadro {
   @inline(__always)
   var ms: Double {
     return self.__ms
+  }
+  
+  @inline(__always)
+  var msImagem: Double {
+    return self.__msImagem
+  }
+  
+  @inline(__always)
+  var msMaos: Double {
+    return self.__msMaos
+  }
+  
+  @inline(__always)
+  var msCorpo: Double {
+    return self.__msCorpo
+  }
+  
+  @inline(__always)
+  var processamento: String {
+    return String(self.__processamento)
   }
 }

@@ -15,8 +15,16 @@ export interface PontosQuadro {
   /** Largura e altura da imagem analisada (depois de girar). */
   largura: number
   altura: number
-  /** Tempo da deteccao, em milissegundos. */
+  /** Tempo da deteccao, em milissegundos (imagem + maos + corpo). */
   ms: number
+  /** Parte do tempo em preparar a imagem (ler o quadro, girar, espelhar, reduzir). */
+  msImagem: number
+  /** Parte do tempo no detector de maos. */
+  msMaos: number
+  /** Parte do tempo no detector do corpo (0 quando nao pediu). */
+  msCorpo: number
+  /** Onde o MediaPipe rodou: 'GPU' ou 'CPU'. */
+  processamento: string
 }
 
 export interface LibresLandmarker

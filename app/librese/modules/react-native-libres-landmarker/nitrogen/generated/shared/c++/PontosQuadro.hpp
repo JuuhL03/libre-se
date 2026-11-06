@@ -31,6 +31,7 @@
 
 
 #include <vector>
+#include <string>
 
 namespace margelo::nitro::libreslandmarker {
 
@@ -45,10 +46,14 @@ namespace margelo::nitro::libreslandmarker {
     double largura     SWIFT_PRIVATE;
     double altura     SWIFT_PRIVATE;
     double ms     SWIFT_PRIVATE;
+    double msImagem     SWIFT_PRIVATE;
+    double msMaos     SWIFT_PRIVATE;
+    double msCorpo     SWIFT_PRIVATE;
+    std::string processamento     SWIFT_PRIVATE;
 
   public:
     PontosQuadro() = default;
-    explicit PontosQuadro(std::vector<double> maos, std::vector<double> lados, std::vector<double> pose, double largura, double altura, double ms): maos(maos), lados(lados), pose(pose), largura(largura), altura(altura), ms(ms) {}
+    explicit PontosQuadro(std::vector<double> maos, std::vector<double> lados, std::vector<double> pose, double largura, double altura, double ms, double msImagem, double msMaos, double msCorpo, std::string processamento): maos(maos), lados(lados), pose(pose), largura(largura), altura(altura), ms(ms), msImagem(msImagem), msMaos(msMaos), msCorpo(msCorpo), processamento(processamento) {}
 
   public:
     friend bool operator==(const PontosQuadro& lhs, const PontosQuadro& rhs) = default;
@@ -69,7 +74,11 @@ namespace margelo::nitro {
         JSIConverter<std::vector<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "pose"))),
         JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "largura"))),
         JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "altura"))),
-        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "ms")))
+        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "ms"))),
+        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "msImagem"))),
+        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "msMaos"))),
+        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "msCorpo"))),
+        JSIConverter<std::string>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "processamento")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::libreslandmarker::PontosQuadro& arg) {
@@ -80,6 +89,10 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "largura"), JSIConverter<double>::toJSI(runtime, arg.largura));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "altura"), JSIConverter<double>::toJSI(runtime, arg.altura));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "ms"), JSIConverter<double>::toJSI(runtime, arg.ms));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "msImagem"), JSIConverter<double>::toJSI(runtime, arg.msImagem));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "msMaos"), JSIConverter<double>::toJSI(runtime, arg.msMaos));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "msCorpo"), JSIConverter<double>::toJSI(runtime, arg.msCorpo));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "processamento"), JSIConverter<std::string>::toJSI(runtime, arg.processamento));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -96,6 +109,10 @@ namespace margelo::nitro {
       if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "largura")))) return false;
       if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "altura")))) return false;
       if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "ms")))) return false;
+      if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "msImagem")))) return false;
+      if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "msMaos")))) return false;
+      if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "msCorpo")))) return false;
+      if (!JSIConverter<std::string>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "processamento")))) return false;
       return true;
     }
   };

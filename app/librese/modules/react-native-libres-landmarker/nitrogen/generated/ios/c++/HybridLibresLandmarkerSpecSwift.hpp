@@ -19,9 +19,9 @@ namespace NitroModules { class ArrayBufferHolder; }
 
 #include "PontosQuadro.hpp"
 #include <vector>
+#include <string>
 #include <NitroModules/ArrayBuffer.hpp>
 #include <NitroModules/ArrayBufferHolder.hpp>
-#include <string>
 
 #include "NitroLibresLandmarker-Swift-Cxx-Umbrella.hpp"
 

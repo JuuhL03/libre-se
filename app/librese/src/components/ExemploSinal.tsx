@@ -135,7 +135,7 @@ export default function ExemploSinal({ exemplo: ex, onFim }: Props) {
 
   const nome = ex.palavra.replace(/_/g, ' ').toUpperCase();
   const legenda = ex.referencia
-    ? 'como a referência faz (você ainda não gravou este)'
+    ? 'como a referência faz'
     : `como foi feito na calibração (${ex.indice + 1} de ${ex.n})`;
 
   return (

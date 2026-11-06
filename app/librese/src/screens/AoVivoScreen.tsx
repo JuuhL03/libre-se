@@ -162,7 +162,7 @@ export default function AoVivoScreen({ onBack }: Props) {
   const cal = estado?.modo === 'CALIBRADO' ? estado.cal : undefined;
   const alfa = estado?.modo === 'ALFABETO' ? estado.alfa : undefined;
   const top = estado?.ultimo?.top ?? [];
-  const aviso = estado?.aviso || cal?.msg || null;
+  const aviso = libres.avisoApp || estado?.aviso || cal?.msg || null;
 
   // "Como se faz?": abre o video do sinal no dicionario de Libras (navegador do celular)
   const comoSeFaz = () => {
@@ -190,12 +190,21 @@ export default function AoVivoScreen({ onBack }: Props) {
               { backgroundColor: conexao === 'conectado' ? '#5FBF77' : RED },
             ]}
           />
-          <Text style={styles.statusTexto}>
-            {textoConexao}
-            {conexao === 'conectado' && libres.msDeteccao
-              ? ` · ${libres.msDeteccao} ms`
-              : ''}
-          </Text>
+          <View>
+            <Text style={styles.statusTexto}>
+              {textoConexao}
+              {conexao === 'conectado' && libres.diag
+                ? ` · ${libres.diag.qps} q/s · ${libres.diag.processamento}`
+                : ''}
+            </Text>
+            {/* de onde vem o tempo de cada quadro (para achar a lentidao sem chutar) */}
+            {conexao === 'conectado' && libres.diag ? (
+              <Text style={styles.statusDetalhe}>
+                imagem {libres.diag.msImagem} · mãos {libres.diag.msMaos} ·
+                corpo {libres.diag.msCorpo} · quadro {libres.diag.msQuadro} ms
+              </Text>
+            ) : null}
+          </View>
         </View>
         <TouchableOpacity
           style={styles.icone}
@@ -274,7 +283,7 @@ export default function AoVivoScreen({ onBack }: Props) {
             </Text>
             <View style={styles.linhaBotoes}>
               <Botao texto="‹" onPress={() => libres.comando('p')} />
-              <Botao texto="Ver como faz" onPress={() => libres.comando('v')} />
+              <Botao texto="Ver como faz" onPress={libres.verComoFaz} />
               <Botao texto="Desfazer" onPress={() => libres.comando('d')} />
               <Botao texto="›" onPress={() => libres.comando('n')} />
             </View>
@@ -372,6 +381,7 @@ const styles = StyleSheet.create({
   },
   ponto: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusTexto: { color: PARCHMENT, fontSize: 13 },
+  statusDetalhe: { color: 'rgba(245,241,232,0.7)', fontSize: 10, marginTop: 1 },
 
   modos: {
     position: 'absolute',

@@ -13,9 +13,9 @@ namespace margelo::nitro::libreslandmarker { struct PontosQuadro; }
 #include "PontosQuadro.hpp"
 #include "JPontosQuadro.hpp"
 #include <vector>
+#include <string>
 #include <NitroModules/ArrayBuffer.hpp>
 #include <NitroModules/JArrayBuffer.hpp>
-#include <string>
 
 namespace margelo::nitro::libreslandmarker {
 
