@@ -178,6 +178,18 @@ export default function AoVivoScreen({ onBack }: Props) {
         outputs={[libres.frameOutput]}
       />
 
+      {/* preparando: na 1a vez o MediaPipe carrega os modelos e prepara a GPU (alguns
+          segundos), e de novo ao trocar alfabeto <-> palavras. Some no 1o quadro detectado. */}
+      {!libres.pronto && !libres.erro && (
+        <View style={styles.preparando} pointerEvents="none">
+          <ActivityIndicator size="large" color={GOLD} />
+          <Text style={styles.preparandoTitulo}>Preparando o reconhecimento…</Text>
+          <Text style={styles.preparandoTexto}>
+            Na primeira vez pode levar alguns segundos.
+          </Text>
+        </View>
+      )}
+
       {/* topo: voltar, conexao, trocar camera */}
       <View style={[styles.topo, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity style={styles.icone} onPress={onBack}>
@@ -191,17 +203,14 @@ export default function AoVivoScreen({ onBack }: Props) {
             ]}
           />
           <View>
-            <Text style={styles.statusTexto}>
-              {textoConexao}
-              {conexao === 'conectado' && libres.diag
-                ? ` · ${libres.diag.qps} q/s · ${libres.diag.processamento}`
-                : ''}
-            </Text>
-            {/* de onde vem o tempo de cada quadro (para achar a lentidao sem chutar) */}
-            {conexao === 'conectado' && libres.diag ? (
+            <Text style={styles.statusTexto}>{textoConexao}</Text>
+            {/* so no modo de desenvolvimento (npx react-native run-android): de onde vem
+                o tempo de cada quadro. No APK de release nao aparece. */}
+            {__DEV__ && conexao === 'conectado' && libres.diag ? (
               <Text style={styles.statusDetalhe}>
-                imagem {libres.diag.msImagem} · mãos {libres.diag.msMaos} ·
-                corpo {libres.diag.msCorpo} · quadro {libres.diag.msQuadro} ms
+                {libres.diag.qps} q/s · {libres.diag.processamento} · imagem{' '}
+                {libres.diag.msImagem} · mãos {libres.diag.msMaos} · corpo{' '}
+                {libres.diag.msCorpo} ms
               </Text>
             ) : null}
           </View>
@@ -382,6 +391,31 @@ const styles = StyleSheet.create({
   ponto: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusTexto: { color: PARCHMENT, fontSize: 13 },
   statusDetalhe: { color: 'rgba(245,241,232,0.7)', fontSize: 10, marginTop: 1 },
+
+  preparando: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(18,23,43,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  preparandoTitulo: {
+    color: PARCHMENT,
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  preparandoTexto: {
+    color: 'rgba(245,241,232,0.7)',
+    fontSize: 13,
+    marginTop: 6,
+    textAlign: 'center',
+  },
 
   modos: {
     position: 'absolute',

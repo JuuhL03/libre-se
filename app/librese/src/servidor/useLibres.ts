@@ -69,6 +69,10 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
   const [erro, setErro] = useState<string | null>(null);
   const [maoVisivel, setMaoVisivel] = useState(false);
   const [diag, setDiag] = useState<Diagnostico | null>(null);
+  // false ate o 1o quadro detectado: na 1a vez o MediaPipe carrega os modelos e prepara a GPU
+  // (alguns segundos); a tela mostra "preparando" em vez de parecer travada
+  const [pronto, setPronto] = useState(false);
+  const prontoRef = useRef(false);
   // "Ver como faz": o exemplo que o servidor mandou e quando chegou (a animacao conta dali)
   const [exemplo, setExemplo] = useState<
     (ExemploSinal & { recebidoEm: number }) | null
@@ -148,6 +152,13 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
     setExemplo(null);
   }, [modo]);
 
+  // trocou o tipo de deteccao (alfabeto: 1 mao; palavras: 2 maos + corpo): o detector e
+  // refeito no proximo quadro (e o do corpo criado na 1a vez) -> "preparando" de novo
+  useEffect(() => {
+    prontoRef.current = false;
+    setPronto(false);
+  }, [deteccao]);
+
   // 2. numero de maos do detector conforme o modo (1 no alfabeto, como o landmarker do app)
   useEffect(() => {
     try {
@@ -186,6 +197,11 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
         setMaoVisivel(visivel);
       }
       // medias de 1 em 1 s (um setState por segundo, nao por quadro)
+      if (!prontoRef.current) {
+        prontoRef.current = true;
+        setPronto(true);
+      }
+
       const s = soma.current;
       s.n += 1;
       s.ms += r.ms;
@@ -317,6 +333,7 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
     limparErro: () => setErro(null),
     maoVisivel,
     diag,
+    pronto,
     deteccao,
     exemplo,
     fecharExemplo: () => setExemplo(null),
