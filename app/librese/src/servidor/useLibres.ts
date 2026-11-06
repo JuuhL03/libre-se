@@ -23,6 +23,13 @@ import {
 
 const POSE_CADA = 0.2; // s: o corpo muda devagar (como na web)
 
+// FORA do componente: o useFrameOutput recria a saida da camera quando este objeto muda
+// (useMemo por referencia). Um objeto novo a cada render reconfigurava a camera a cada
+// resposta do servidor (~12x/s): travava, picotava os quadros e nenhuma letra ficava
+// estavel o bastante (0,3 s) para entrar no texto.
+const RESOLUCAO_DETECCAO = { width: 640, height: 480 }; // a mesma largura de deteccao da web
+const SEM_AVISO_QUADRO_PERDIDO = () => {};
+
 export type Deteccao = '1mao' | 'v3';
 
 type Opcoes = {
@@ -185,11 +192,11 @@ export function useLibres({ usuario, cameraFrontal, ativo }: Opcoes) {
 
   const frameOutput = useFrameOutput({
     pixelFormat: 'rgb',
-    targetResolution: { width: 640, height: 480 }, // a mesma largura de deteccao da web
+    targetResolution: RESOLUCAO_DETECCAO,
     enablePhysicalBufferRotation: true,
     dropFramesWhileBusy: true,
     onFrame,
-    onFrameDropped: () => {},
+    onFrameDropped: SEM_AVISO_QUADRO_PERDIDO,
   });
 
   const comando = useCallback(
