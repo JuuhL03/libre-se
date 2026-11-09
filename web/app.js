@@ -11,7 +11,7 @@ const SEM_CAMERA = TESTE && PARAMS.has("semcamera");
 // processamento do MediaPipe: "cpu" da pontos identicos aos do app de computador (Python);
 // "gpu" e mais rapida em celular. "auto" (padrao): comeca na CPU e, se ficar lenta, testa a GPU.
 const PROCESSAMENTO = (PARAMS.get("processamento") || "").toLowerCase();
-const MS_LENTO = 45;                             // ms por quadro na CPU acima disso: testa a GPU
+const MS_LENTO = 28;                             // ms por quadro na CPU acima disso: testa a GPU (30 fps = 33 ms)
 const LARGURA_DETECCAO = 640;                    // a mesma largura da extracao dos videos de treino
 const POSE_CADA = 0.2;                           // s: o corpo muda devagar (como o DetectorV3)
 const ENVIO_MS = 80;                             // manda os quadros em lotes, ~12 por segundo
@@ -127,7 +127,7 @@ async function criarPar(delegate, numHands = 2) {
 
 async function criarDetectores() {
   if (!S.fileset) S.fileset = await FilesetResolver.forVisionTasks(new URL("vendor/tasks-vision/wasm", location.href).href);
-  const salvo = ler("libres.proc");
+  const salvo = ler("libres.proc2");
   let quer = PROCESSAMENTO === "gpu" ? "GPU" : PROCESSAMENTO === "cpu" ? "CPU"
     : PROCESSAMENTO === "auto" ? "auto" : (salvo === "GPU" || salvo === "CPU" ? salvo : "auto");
   S.autoProc = quer === "auto";
@@ -155,12 +155,12 @@ async function testarGPU() {
       const velhos = [S.maos, S.pose];
       S.maos = gpu.maos; S.pose = gpu.pose; S.proc = "GPU"; S.msDet = msGpu;
       velhos.forEach((d) => { try { d.close(); } catch { /* ja fechado */ } });
-      gravar("libres.proc", "GPU");
+      gravar("libres.proc2", "GPU");
     } else {
       gpu.maos.close(); gpu.pose.close();
-      gravar("libres.proc", "CPU");
+      gravar("libres.proc2", "CPU");
     }
-  } catch (e) { console.warn("GPU indisponivel", e); gravar("libres.proc", "CPU"); }
+  } catch (e) { console.warn("GPU indisponivel", e); gravar("libres.proc2", "CPU"); }
   S.autoProc = false; S.testandoGPU = false;
 }
 
@@ -220,13 +220,24 @@ function esperarImagem(ms) {
 }
 
 async function pedirStream(deviceId) {
+  // 1o: pelo menos 24 quadros/s (o treino foi a 30): muitas webcams so dao 15 quadros/s em 1280x720,
+  // e sem o minimo o navegador escolhe o tamanho maior e a taxa menor. Sem um modo assim, sem o minimo.
   const base = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user" };
-  try {
-    return await navigator.mediaDevices.getUserMedia({ video: { ...base, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-  } catch (e) {
-    if (e.name === "NotAllowedError" || e.name === "SecurityError") throw e;
-    return await navigator.mediaDevices.getUserMedia({ video: deviceId ? base : true, audio: false });  // sem pedir tamanho
+  const tam = { width: { ideal: 1280 }, height: { ideal: 720 } };
+  const tentativas = [
+    { ...base, ...tam, frameRate: { min: 24, ideal: 30 } },
+    { ...base, ...tam, frameRate: { ideal: 30 } },
+    deviceId ? { ...base, frameRate: { ideal: 30 } } : { frameRate: { ideal: 30 } },   // sem pedir tamanho
+  ];
+  let erro;
+  for (const video of tentativas) {
+    try { return await navigator.mediaDevices.getUserMedia({ video, audio: false }); }
+    catch (e) {
+      if (e.name === "NotAllowedError" || e.name === "SecurityError") throw e;
+      erro = e;
+    }
   }
+  throw erro;
 }
 
 function pararStream() {
@@ -460,7 +471,7 @@ function detectar() {
   S.nDet += 1;
   if (S.autoProc && !S.testandoGPU && S.nDet >= 40) {
     if (S.msDet > MS_LENTO) testarGPU();
-    else { S.autoProc = false; gravar("libres.proc", "CPU"); }
+    else { S.autoProc = false; gravar("libres.proc2", "CPU"); }
   }
   if (S.tAnt) {
     const dt = t - S.tAnt;
