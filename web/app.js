@@ -127,7 +127,7 @@ async function criarPar(delegate, numHands = 2) {
 
 async function criarDetectores() {
   if (!S.fileset) S.fileset = await FilesetResolver.forVisionTasks(new URL("vendor/tasks-vision/wasm", location.href).href);
-  const salvo = ler("libres.proc2");
+  const salvo = ler("libres.proc3");
   let quer = PROCESSAMENTO === "gpu" ? "GPU" : PROCESSAMENTO === "cpu" ? "CPU"
     : PROCESSAMENTO === "auto" ? "auto" : (salvo === "GPU" || salvo === "CPU" ? salvo : "auto");
   S.autoProc = quer === "auto";
@@ -155,12 +155,12 @@ async function testarGPU() {
       const velhos = [S.maos, S.pose];
       S.maos = gpu.maos; S.pose = gpu.pose; S.proc = "GPU"; S.msDet = msGpu;
       velhos.forEach((d) => { try { d.close(); } catch { /* ja fechado */ } });
-      gravar("libres.proc2", "GPU");
+      gravar("libres.proc3", "GPU");
     } else {
       gpu.maos.close(); gpu.pose.close();
-      gravar("libres.proc2", "CPU");
+      gravar("libres.proc3", "CPU");
     }
-  } catch (e) { console.warn("GPU indisponivel", e); gravar("libres.proc2", "CPU"); }
+  } catch (e) { console.warn("GPU indisponivel", e); gravar("libres.proc3", "CPU"); }
   S.autoProc = false; S.testandoGPU = false;
 }
 
@@ -469,10 +469,10 @@ function detectar() {
   const ms = performance.now() - tDet;
   S.msDet = S.msDet ? 0.9 * S.msDet + 0.1 * ms : ms;
   S.nDet += 1;
-  if (S.autoProc && !S.testandoGPU && S.nDet >= 40) {
-    if (S.msDet > MS_LENTO) testarGPU();
-    else { S.autoProc = false; gravar("libres.proc2", "CPU"); }
-  }
+  // a decisao CPU x GPU fica aberta a sessao inteira: no comeco, sem maos no quadro, a CPU parece
+  // rapida; com as duas maos (palavras, calibrado) ela pode passar de 33 ms e derrubar para 15 quadros/s.
+  // O teste da GPU trava a imagem por ~1 s, entao so roda fora de uma gravacao.
+  if (S.autoProc && !S.testandoGPU && S.nDet >= 40 && S.msDet > MS_LENTO && !(S.est && S.est.gravando)) testarGPU();
   if (S.tAnt) {
     const dt = t - S.tAnt;
     if (dt > 0 && dt < 1) S.fpsLocal = S.fpsLocal ? 0.9 * S.fpsLocal + 0.1 / dt : 1 / dt;
