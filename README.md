@@ -1,41 +1,83 @@
-# 🤟 Libre-se
+# 🤟 Libre-se (SignBridge)
 
-Reconhecimento de sinais em **Libras** (Língua Brasileira de Sinais) usando visão computacional e machine learning.
+Protótipo do TCC **"SignBridge: Desenvolvimento de um Sistema Multiplataforma para
+Reconhecimento de LIBRAS em Tempo Real e Tradução para Texto e Voz"** (Grupo 6,
+Ciência da Computação, Faculdades Integradas de Bauru, 2026).
 
-Extrai landmarks das mãos com **MediaPipe Hands**, calcula features temporais (estatísticas, ângulos dos dedos, distâncias relativas) e classifica com **XGBoost**.
+O sistema reconhece LIBRAS pela câmera comum do computador ou do celular e devolve o
+resultado em texto e voz. A detecção das mãos e do corpo (MediaPipe) roda no aparelho, e
+só as coordenadas dos pontos vão para o servidor, nunca a imagem. São três modos:
 
-## 🎯 Roteiro para a demonstração
+- **ALFABETO:** as 26 letras do alfabeto manual (Random Forest com regras de geometria; H,
+  J, K, X e Z pelo movimento), com calibração opcional das letras de cada pessoa.
+- **PALAVRAS:** palavras isoladas com as duas mãos e o corpo (XGBoost), treinadas com o
+  MINDS-Libras e a LIBRAS-EQT-UECE (65 palavras).
+- **CALIBRADO:** o vocabulário do dia a dia (cena da padaria) com exemplos da própria
+  pessoa (DTW); o que não se parece com nenhum exemplo vira "não reconhecido".
 
-Nenhum modelo acerta 100% com qualquer pessoa. Para acertar praticamente sempre
-com quem vai **apresentar**, o app é calibrado com exemplos dessa pessoa.
+O mesmo reconhecimento atende a **página web** (`web/` + `servidor/`, publicada no
+Railway), ao **app móvel** Android e iOS (`app/librese/`) e ao **app de computador**
+(`libras_camera.py`).
 
-**Palavras do dia a dia (oi, bom dia, números, cena da padaria) — modo CALIBRADO:**
+## 📁 Organização
+
+| Pasta ou arquivo | O que é |
+|---|---|
+| `libres_features.py`, `libres_v3.py`, `libres_realtime.py`, `calibracao.py`, `alfabeto_calibrado.py`, `libres_modelos.py` | Módulos compartilhados: forma da mão, preparo e características das palavras, segmentador e reconhecedores, modo calibrado (DTW), calibração do alfabeto, salvar/abrir modelos. Treino, avaliação e servidor usam as mesmas funções |
+| `servidor/` | Servidor FastAPI + WebSocket (`app.py`, `motor.py`), preparo da página e teste do servidor |
+| `web/` | A página (HTML, CSS e JavaScript, sem frameworks) |
+| `app/librese/` | App móvel em React Native com TypeScript; MediaPipe nativo em Kotlin e Swift |
+| `libras_camera.py` | App de computador (janela com câmera e painel) |
+| `treino_v3.py`, `avaliar_v3.py`, `diagnostico_v3.py`, `extrair_minds_v3.py`, `extrair_eqt_v3.py` | Palavras, versão final: extração das bases, treino, avaliação com pessoa fora do treino (LOSO) e diagnóstico |
+| `train_alfabeto.py`, `coletar_alfabeto.py`, `importar_imagens_alfabeto.py` | Alfabeto: treino e coleta |
+| `coletar_palavras.py` | Ferramenta de coleta de novos sinais (mesmo segmentador do app) |
+| `teste_v3.py`, `teste_soletrador.py`, `teste_calibracao.py`, `servidor/teste_servidor.py` | Testes sem câmera (casos de teste do TCC) |
+| `train_rotulado.py`, `eval_loso.py`, `integrate_minds.py`, `extrair_minds_videos.py`, `analisar_palavras.py` | Primeira e segunda versões do reconhecimento de palavras (seções 3.6.3 e 3.6.4 do TCC); o servidor usa o modelo da segunda versão como reserva |
+| `ver_sinais.py`, `reproduzir_trecho.py` | Ferramentas de análise (confusões entre sinais, trechos gravados com a tecla S) |
+| `modelo_alfabeto.pkl`, `modelo_palavras_v3.pkl`, `modelo_rotulado_xgb.pkl`, `hand_landmarker.task` | Modelos treinados e o modelo de mãos do MediaPipe |
+| `vocabulario.txt` | Palavras do modo CALIBRADO |
+| `pesquisa/` | Script do formulário da avaliação com usuários |
+| `Dockerfile`, `publicar_site.bat` | Publicação da versão web |
+| `avaliar_tcc.bat`, `avaliar_sem_preparo.bat` | Reproduzem as Tabelas 2 e 3 do TCC (Windows) |
+
+## 🚀 Como rodar
+
+**Versão web no computador** (a câmera funciona em `localhost`):
+
 ```bash
-python libras_camera.py --usuario julia    # M até CALIBRADO; o app pede cada sinal 5 vezes
+pip install -r servidor/requirements.txt -r servidor/requirements-modelos.txt
+python servidor/preparar_web.py          # 1a vez: baixa o MediaPipe do navegador (~22 MB)
+uvicorn servidor.app:app --port 8000     # abra http://localhost:8000
 ```
-Edite `vocabulario.txt` para mudar as palavras. Detalhes na seção
-[Modo CALIBRADO](#-modo-calibrado-palavras-do-dia-a-dia).
 
-**Outras opções (modelos treinados):**
+**App de computador:**
 
-**Alfabeto (A–Z)** — já vem treinado com datasets públicos de imagens
-(`modelo_alfabeto.pkl`, sem precisar gravar ninguém). Calibrar com quem vai
-apresentar é opcional:
 ```bash
-python coletar_alfabeto.py --pessoa 1      # opcional, ~6 min
-python train_alfabeto.py                   # junta com os datasets públicos
+pip install -r requirements.txt
+python libras_camera.py                  # M troca o modo: ALFABETO → PALAVRAS → CALIBRADO
 ```
 
-**Palavras**
-```bash
-python analisar_palavras.py                # escolhe as melhores palavras (1 mão)
-python coletar_palavras.py --sinalizador 50 --palavras <lista> --takes 10
-python train_rotulado.py --palavras <lista>
-python eval_loso.py --palavras <lista>     # número para o TCC
-```
+**App móvel:** veja [App mobile](#-app-mobile-android-e-ios).
 
-Depois: `python libras_camera.py`. Na apresentação: boa iluminação, mão inteira
-no quadro, a outra mão abaixada nas palavras de uma mão.
+## 📊 Reproduzir os números do TCC
+
+As bases públicas **não vêm junto** (licenças): baixe o MINDS-Libras
+(https://zenodo.org/records/2667329, ZIPs em `minds_videos/`) e a LIBRAS-EQT-UECE
+(https://zenodo.org/records/21398895, ZIP em `eqt_videos/`) e extraia os pontos com
+`python extrair_minds_v3.py` e `python extrair_eqt_v3.py`. Depois:
+
+| No TCC | Comando |
+|---|---|
+| Tabelas 2 e 3, versão final e divisão aleatória | `avaliar_tcc.bat` (ou `python avaliar_v3.py --dados minds --recortar --sem-mao-parada --aleatoria --comparar` e o mesmo com `--dados eqt`) |
+| Tabelas 2 e 3, sem o preparo | `avaliar_sem_preparo.bat` (`python avaliar_v3.py --dados minds` e `--dados eqt`) |
+| Tabela 1 (dados sintéticos) | `python teste_v3.py` |
+| CT06 (alfabeto com movimento) | `python teste_soletrador.py --sementes 0,11,22,33,44,55 --tremor 1,2,3 --falhas 0,0.08` |
+| CT07 (modo calibrado) | `python teste_calibracao.py` |
+| CT08 e servidor | `python servidor/teste_servidor.py` |
+| Modelo usado no app | `python treino_v3.py --recortar --sem-mao-parada` |
+
+O restante deste README é o caderno de desenvolvimento: como cada parte funciona e o
+histórico das versões.
 
 ## 🌐 Versão web (navegador do computador e do celular)
 
@@ -149,12 +191,10 @@ câmera do celular → MediaPipe no celular → pontos (mãos + corpo) → WebSo
   (`https://libre-se-web-production.up.railway.app`). Para testar com o servidor no
   computador, troque por `http://<IP do computador>:8000` (veja abaixo).
 
-**Estado:** compila no Android (debug e release) e no iOS (simulador, Xcode 27.2), e abre
-na tela inicial. **Ainda não foi testado num celular de verdade:** o simulador do iOS não
-tem câmera, e no emulador Android de Mac com chip Apple o MediaPipe fecha o app (erro
-SIGILL, limitação do emulador). Falta conferir no aparelho se o espelhamento dos pontos
-bate com o da página: se a página acerta uma letra e o app erra sempre, o espelhamento
-está trocado.
+**Estado:** compila no Android (debug e release) e no iOS. Na etapa final, a equipe instalou o
+app em celulares Android e iPhone e confirmou que a câmera, a detecção das mãos e o
+reconhecimento funcionam com o mesmo servidor; no Android, a detecção usa a GPU. Ainda não
+houve uma avaliação sistemática com usuários (a pesquisa do TCC usou a versão web).
 
 **Gerar o APK (Android)** — node 22 ou mais novo, Android SDK e JDK 17:
 
@@ -670,156 +710,11 @@ python libras_camera.py        # câmera: alfabeto + palavras
 Na câmera, modo PALAVRAS: comece com a mão fora do quadro, faça o sinal e
 abaixe a mão.
 
-## Funcionalidades
+## Dados e licenças
 
-- **Alfabeto (A–Z)**: letras paradas pelo modelo e letras com movimento (H, J, K, X, Z) por regras
-- **Palavras v3**: as duas mãos e a posição delas em relação ao corpo, treinadas com MINDS-Libras e
-  LIBRAS-EQT-UECE; sinal incerto não entra no texto
-- **Modo CALIBRADO**: palavras do dia a dia (oi, bom dia, números...) com exemplos da própria
-  pessoa; o que não parece com nenhum exemplo vira "não reconhecido"
-- **Versão web** (computador e celular): a página roda o MediaPipe e manda só os pontos ao servidor
-- **App mobile** (Android e iOS): roda o MediaPipe no celular e usa o mesmo servidor e a mesma
-  IA da versão web, mandando só os pontos
-- **Texto → fala** na web (botão Falar)
-- Ferramentas para o TCC: avaliação com pessoa fora do treino (LOSO), diagnóstico das bases,
-  `ver_sinais.py` (confusões e figuras) e `reproduzir_trecho.py` (erros ao vivo, tecla S)
-
-## Estrutura
-
-```
-Libre-se/
-├── train_rotulado.py          # Pipeline de treino (extração → aumento → XGBoost)
-├── libras_camera.py          # App da câmera: alfabeto + palavras + calibrado, com painel
-├── calibracao.py             # Modo CALIBRADO: exemplos da pessoa, DTW, "não reconhecido"
-├── teste_calibracao.py       # Teste da calibração sem câmera (pessoas sintéticas)
-├── vocabulario.txt           # Palavras do modo CALIBRADO (cena da padaria)
-├── libres_realtime.py        # Segmentadores, soletrador (letras com movimento), reconhecedores
-├── libres_v3.py              # Palavras v3: duas mãos + corpo (preparo, features, aumento)
-├── extrair_minds_v3.py       # Extração v3 dos vídeos do MINDS (2 mãos + pose)
-├── extrair_eqt_v3.py         # Extração v3 da LIBRAS-EQT-UECE (só os sinais isolados)
-├── diagnostico_v3.py         # O que muda de uma pessoa para outra nos sinais extraídos
-├── treino_v3.py              # Treino v3 -> modelo_palavras_v3.pkl
-├── avaliar_v3.py             # LOSO da v3 (e comparação com a v2)
-├── teste_v3.py               # Teste de ponta a ponta da v3 com sinais sintéticos
-├── teste_soletrador.py       # Teste do alfabeto sem câmera (poses reais + movimento simulado)
-├── libres_modelos.py         # Salva/abre os modelos (.pkl comprimidos, cabem no GitHub)
-├── reproduzir_trecho.py      # Analisa trechos salvos com a tecla S
-├── ver_sinais.py             # Os sinais das bases lado a lado (e o seu, da tecla S): confusões, figuras
-├── servidor/                 # Versão web: app.py (FastAPI + WebSocket), motor.py (os 3 modos),
-│                             #   preparar_web.py, fixar_versoes.py, requirements*.txt
-├── web/                      # Versão web: a página (index.html, app.js, estilo.css)
-├── app/librese/              # App mobile (React Native): telas em src/screens, conversa com o
-│                             #   servidor em src/servidor, MediaPipe nativo em
-│                             #   modules/react-native-libres-landmarker
-├── Dockerfile                # Imagem da versão web (Railway ou qualquer Docker)
-├── test_camera_temporal.py    # Inferência em tempo real com webcam (antigo)
-├── collect_signs.py           # Coleta de sinais via webcam (A-Z, 1-10)
-├── auto_split_signs.py        # Divisão automática de vídeos YouTube por movimento
-├── slice_signs.py             # Divisão manual de vídeos com timestamps
-├── integrate_minds.py         # Extração do dataset MINDS para formato .npy
-├── modelo_alfabeto.pkl        # Alfabeto: Random Forest (datasets públicos de imagens), comprimido
-├── modelo_palavras_v3.pkl     # Palavras v3 (MINDS + EQT, duas mãos + corpo), comprimido
-├── modelo_rotulado_xgb.pkl    # Modelo antigo de palavras (v1, uma mão); o app usa o v3
-├── hand_landmarker.task       # Modelo MediaPipe de detecção de mãos
-├── requirements.txt           # Dependências
-└── README.md
-```
-
-## Instalação
-
-```bash
-git clone https://github.com/ElielFreitas/Libre-se.git
-cd Libre-se
-pip install -r requirements.txt
-```
-
-Baixe o modelo `hand_landmarker.task` do [MediaPipe Models](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task) e coloque na raiz do projeto (já incluso).
-
-Os modelos treinados já vêm no repositório. Eles são salvos **comprimidos** (joblib,
-gzip): o do alfabeto tem 19 MB em vez de 165 MB, abaixo do limite de 100 MB por
-arquivo do GitHub. Os scripts de treino já salvam assim, e os modelos antigos (pickle
-puro) continuam abrindo.
-
-## Como usar
-
-### Coletar sinais (A-Z e 1-10)
-
-```bash
-python collect_signs.py
-```
-
-Grava 5 takes por letra/número via webcam. Os arquivos `.npy` são salvos em `coletados/{classe}/`.
-
-### Extrair dataset MINDS
-
-```bash
-python integrate_minds.py
-```
-
-Extrai os segmentos do dataset MINDS (CSV) e salva em `coletados/`.
-
-### Treinar modelo
-
-```bash
-python train_rotulado.py
-```
-
-Processa vídeos em `palavras2/` e dados em `coletados/`, aplica aumentaçãono treino (3x), treina XGBoost com 639 features e salva `modelo_rotulado_xgb.pkl`.
-
-### Testar em tempo real
-
-```bash
-python test_camera_temporal.py
-```
-
-Abre a webcam e exibe o sinal reconhecido com a confiança em tempo real.
-
-### Processar vídeos YouTube
-
-```bash
-python auto_split_signs.py
-```
-
-Detecta segmentos de movimento em vídeos de compilações, verifica presença de mão com MediaPipe e corta com FFmpeg. Os clips salvos em `palavras2/` precisam ser renomeados antes do treino.
-
-```bash
-python slice_signs.py
-```
-
-Versão manual: digite `inicio fim label` por vídeo.
-
-## Dataset MINDS
-
-O modelo usa o dataset [MINDS](https://universe.robots.cloud.lncc.br) (Libras), que contém 4.518 amostras de 20 classes (~226 por classe), com landmarks extraídos por MediaPipe. Execute `integrate_minds.py` para extrair os segmentos do CSV.
-
-## Features
-
-Para cada frame de 21 landmarks (x, y, z), o pipeline calcula:
-
-| Grupo | Features | Descrição |
-|-------|----------|-----------|
-| Landmarks normalizados | 504 | Média, mediana, std, min, max, range, diff para cada landmark (x,y,z) |
-| Centróide | 15 | Média, mediana, std, min, max da posição do centróide |
-| Distâncias relativas | 70 | Média, mediana, std, min, max, range, diff entre cada landmark e os demais |
-| Ângulos dos dedos | 50 | 10 ângulos (MCP/PIP) × 5 estatísticas |
-
-**Total: 639 features** por signo.
-
-## Modelos atuais
-
-| | O que reconhece | Como | Resultado |
-|---|---|---|---|
-| `modelo_alfabeto.pkl` | 24 letras paradas (J e Z só com movimento) | Random Forest, 200 árvores, datasets públicos de imagens | 162/162 sequências no `teste_soletrador.py` (poses reais, movimento simulado) |
-| `modelo_palavras_v3.pkl` | as palavras das bases do treino (MINDS: 20; EQT: 45) | XGBoost, 300 árvores, `--recortar --sem-mao-parada` | pessoa fora do treino, cada base avaliada separada: MINDS 91,5% (20 sinais), EQT 72,3% (45 sinais) |
-| modo CALIBRADO | o `vocabulario.txt` | exemplos da própria pessoa (DTW) | 98,9% com pessoas sintéticas; o número real sai com a webcam |
-
-O primeiro modelo do projeto (XGBoost, 61 classes, uma mão) tinha 45% de acurácia
-no teste com as 20 classes do MINDS.
-
-O `modelo_palavras_v3.pkl` foi treinado com o MINDS-Libras e a LIBRAS-EQT-UECE (esta
-sob CC BY-NC 4.0: uso não comercial, citando a fonte). Os vídeos e os pontos extraídos
-das bases não vão para o repositório.
-
-## Licença
-
-MIT
+- **MINDS-Libras** (Rezende, Almeida e Guimarães, 2021) e **LIBRAS-EQT-UECE** (Moraes et al.,
+  2026, CC BY-NC 4.0): os vídeos e os pontos extraídos não fazem parte do projeto; vão só os
+  modelos treinados.
+- A calibração de cada pessoa (`calibracao/`, `dados_web/`) é dado pessoal e fica fora do
+  projeto. No modo pesquisa, nada é guardado no servidor.
+- Código disponível com os autores.
