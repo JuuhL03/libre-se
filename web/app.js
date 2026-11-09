@@ -1,17 +1,17 @@
 // Libre-se web: camera + MediaPipe no navegador; o reconhecimento roda no
 // servidor (servidor/app.py), com o mesmo codigo e os mesmos modelos do app de
 // computador. Para o servidor vao SO os pontos das maos e do corpo, nunca a imagem.
-import { FilesetResolver, HandLandmarker, PoseLandmarker } from "./vendor/tasks-vision/vision_bundle.mjs";
+// O MediaPipe roda num Web Worker (detector.js), fora da thread que desenha a pagina.
 
 const PARAMS = new URLSearchParams(location.search);
 const TESTE = PARAMS.has("teste");               // ganchos para os testes automaticos
 // modo pesquisa (teste com usuarios do TCC): anonimo, sem perfil e sem salvar nada no servidor
 const PESQUISA = PARAMS.has("pesquisa");
 const SEM_CAMERA = TESTE && PARAMS.has("semcamera");
-// processamento do MediaPipe: "cpu" da pontos identicos aos do app de computador (Python);
-// "gpu" e mais rapida em celular. "auto" (padrao): comeca na CPU e, se ficar lenta, testa a GPU.
-const PROCESSAMENTO = (PARAMS.get("processamento") || "").toLowerCase();
-const MS_LENTO = 28;                             // ms por quadro na CPU acima disso: testa a GPU (30 fps = 33 ms)
+// processamento do MediaPipe: como no app movel, tenta a GPU e cai para a CPU se ela falhar.
+// ?processamento=cpu forca a CPU (pontos identicos aos do app de computador em Python).
+const PROCESSAMENTO = (PARAMS.get("processamento") || "gpu").toLowerCase() === "cpu" ? "cpu" : "gpu";
+const DET_TRAVADO_MS = 3000;                     // quadro no worker sem resposta ha mais que isso: libera
 const LARGURA_DETECCAO = 640;                    // a mesma largura da extracao dos videos de treino
 const POSE_CADA = 0.2;                           // s: o corpo muda devagar (como o DetectorV3)
 const ENVIO_MS = 80;                             // manda os quadros em lotes, ~12 por segundo
@@ -65,8 +65,8 @@ const S = {
   usuario: PESQUISA ? "pesquisa" : ler("libres.usuario"), codigo: ler("libres.codigo"), sid: novoId(),
   ws: null, conectado: false, tentativas: 0, emVoo: 0, idLote: 0, tEnvio: 0, timerReconexao: null,
   fila: [], video: null, stream: null, cameras: [], camAtual: null,
-  maos: null, pose: null, numHands: 2, trocando: false, ultimaPose: null, tPose: -1e9,
-  fileset: null, proc: "", autoProc: false, testandoGPU: false, msDet: 0, nDet: 0,
+  detector: null, detPronto: false, detOcupado: false, tEnvioDet: 0, idDet: 0, esperas: new Map(),
+  numHands: 2, trocando: false, ultimaPose: null, tPose: -1e9, proc: "", msDet: 0, nDet: 0,
   det: document.createElement("canvas"), visto: null, novoQuadro: false, tVideo: -1,
   fpsLocal: 0, tAnt: 0, exemplo: null, assinatura: {}, falarCada: ler("libres.falar") === "1",
   ultimoFalado: null,
@@ -111,66 +111,53 @@ ui.perfil.addEventListener("click", async () => {
   reconectar(true);
 });
 
-// ------------------------------------------------------------------ MediaPipe
-async function criarPar(delegate, numHands = 2) {
-  // os MESMOS limiares do app de computador e da extracao dos videos (modo IMAGEM)
-  const criar = (Classe, opcoes) => Classe.createFromOptions(S.fileset, { ...opcoes,
-    baseOptions: { ...opcoes.baseOptions, delegate } });
-  const maos = await criar(HandLandmarker, {
-    baseOptions: { modelAssetPath: "modelos/hand_landmarker.task" }, runningMode: "IMAGE", numHands,
-    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
-  const pose = await criar(PoseLandmarker, {
-    baseOptions: { modelAssetPath: "modelos/pose_landmarker_lite.task" }, runningMode: "IMAGE", numPoses: 1,
-    minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, outputSegmentationMasks: false });
-  return { maos, pose };
+// ------------------------------------------------------------------ MediaPipe (no worker)
+// pedido ao worker que espera resposta (iniciar, maos, imagem); os quadros vao por receberPontos
+function pedirDetector(msg, transferir = []) {
+  return new Promise((ok, falha) => {
+    const id = ++S.idDet;
+    S.esperas.set(id, { ok, falha });
+    S.detector.postMessage({ ...msg, id }, transferir);
+  });
+}
+
+function respostaDetector(ev) {
+  const r = ev.data;
+  if (r.tipo === "pontos") { receberPontos(r); return; }
+  if (r.tipo === "erro" && r.origem === "quadro") { S.detOcupado = false; console.warn("[detector]", r.msg); return; }
+  const espera = S.esperas.get(r.id);
+  if (!espera) { if (r.tipo === "erro") console.warn("[detector]", r.msg); return; }
+  S.esperas.delete(r.id);
+  if (r.tipo === "erro") espera.falha(new Error(r.msg)); else espera.ok(r);
 }
 
 async function criarDetectores() {
-  if (!S.fileset) S.fileset = await FilesetResolver.forVisionTasks(new URL("vendor/tasks-vision/wasm", location.href).href);
-  const salvo = ler("libres.proc3");
-  let quer = PROCESSAMENTO === "gpu" ? "GPU" : PROCESSAMENTO === "cpu" ? "CPU"
-    : PROCESSAMENTO === "auto" ? "auto" : (salvo === "GPU" || salvo === "CPU" ? salvo : "auto");
-  S.autoProc = quer === "auto";
-  if (quer === "auto") quer = "CPU";
-  let par;
-  try { par = await criarPar(quer, 2); }
-  catch (e) {
-    if (quer === "CPU") throw e;
-    console.warn("GPU indisponivel; usando CPU", e);
-    quer = "CPU"; par = await criarPar("CPU", 2);
+  if (!S.detector) {
+    S.detector = new Worker("detector.js");          // classico: o MediaPipe usa importScripts para o WASM
+    S.detector.onmessage = respostaDetector;
+    S.detector.onerror = (e) => console.error("[detector] worker", e.message || e);
   }
-  S.maos = par.maos; S.pose = par.pose; S.numHands = 2; S.proc = quer;
-}
-
-async function testarGPU() {
-  // auto: a CPU ficou lenta neste aparelho (celular): a GPU e mais rapida? (decide uma vez e guarda)
-  S.testandoGPU = true;
-  try {
-    const gpu = await criarPar("GPU", S.numHands);
-    gpu.maos.detect(S.det);                            // a 1a vez compila os shaders
-    const t0 = performance.now();
-    for (let i = 0; i < 5; i++) gpu.maos.detect(S.det);
-    const msGpu = (performance.now() - t0) / 5;
-    if (msGpu < 0.7 * S.msDet) {
-      const velhos = [S.maos, S.pose];
-      S.maos = gpu.maos; S.pose = gpu.pose; S.proc = "GPU"; S.msDet = msGpu;
-      velhos.forEach((d) => { try { d.close(); } catch { /* ja fechado */ } });
-      gravar("libres.proc3", "GPU");
-    } else {
-      gpu.maos.close(); gpu.pose.close();
-      gravar("libres.proc3", "CPU");
+  gravar("libres.proc3", "");                        // a decisao antiga CPU x GPU nao vale mais
+  let r;
+  try { r = await pedirDetector({ tipo: "iniciar", proc: PROCESSAMENTO, numHands: 2 }); }
+  catch (e) {
+    // o MediaPipe no worker precisa de OffscreenCanvas (Chrome, Edge, Firefox; Safari 17 / iOS 17 ou mais novo)
+    if (typeof OffscreenCanvas === "undefined" || /document/.test(String(e && e.message))) {
+      throw new Error("Este navegador é antigo demais para o reconhecimento. Atualize o navegador " +
+        "(no iPhone e no Mac: iOS/macOS com Safari 17 ou mais novo) ou use o Google Chrome.  [" + e.message + "]");
     }
-  } catch (e) { console.warn("GPU indisponivel", e); gravar("libres.proc3", "CPU"); }
-  S.autoProc = false; S.testandoGPU = false;
+    throw e;
+  }
+  S.numHands = 2; S.proc = r.proc; S.detPronto = true; S.detOcupado = false;
 }
 
 async function ajustarDeteccao(modo) {
   const tipo = (S.info && S.info.deteccao && S.info.deteccao[modo]) || "v3";
   S.deteccao = tipo;
   const n = tipo === "1mao" ? 1 : 2;           // alfabeto: uma mao, como o landmarker do app
-  if (!S.maos || n === S.numHands) return;
+  if (!S.detPronto || n === S.numHands) return;
   S.trocando = true;
-  try { await S.maos.setOptions({ numHands: n }); S.numHands = n; } catch (e) { console.warn(e); }
+  try { await pedirDetector({ tipo: "maos", n }); S.numHands = n; } catch (e) { console.warn(e); }
   S.trocando = false;
   S.ultimaPose = null; S.tPose = -1e9;
 }
@@ -355,7 +342,7 @@ $("#dlg-camera").addEventListener("close", async () => {
   if (dlg.returnValue !== "usar") return;
   const id = $("#sel-camera").value;
   if (!id) return;
-  if (!S.maos) {                                     // a camera nao tinha aberto: continua o inicio
+  if (!S.detPronto) {                                // a camera nao tinha aberto: continua o inicio
     gravar("libres.camera", id);
     if (await etapaCamera(id)) await etapaDeteccao();
   } else {
@@ -424,9 +411,17 @@ function agendarQuadro() {
 }
 
 // ------------------------------------------------------------------ deteccao de cada quadro
+// A pagina so copia o quadro (espelhado, 640 de largura) e manda ao worker. Enquanto ele trabalha,
+// os quadros novos sao pulados (como o frame processor do app): a imagem na tela nunca espera o
+// MediaPipe, e o tempo de cada ponto e o da captura, nao o da resposta.
 function detectar() {
   const v = S.video;
-  if (!v || v.readyState < 2 || !v.videoWidth || S.trocando || !S.maos) return;
+  if (!v || v.readyState < 2 || !v.videoWidth || S.trocando || !S.detPronto) return;
+  if (S.detOcupado) {
+    if (performance.now() - S.tEnvioDet < DET_TRAVADO_MS) return;
+    console.warn("[detector] sem resposta; liberando");   // o worker perdeu um quadro: segue
+    S.detOcupado = false;
+  }
   if (v.requestVideoFrameCallback) {
     if (!S.novoQuadro) return;
     S.novoQuadro = false;
@@ -444,42 +439,31 @@ function detectar() {
   dc.drawImage(v, 0, 0, dw, dh);
   dc.setTransform(1, 0, 0, 1, 0, 0);
   monitorar();
-  const tDet = performance.now();
-  let res;
-  try { res = S.maos.detect(S.det); } catch (e) { console.warn(e); return; }
-  const m = [null, null], l = [-1, -1];
-  (res.landmarks || []).slice(0, 2).forEach((mao, k) => {
-    m[k] = mao.flatMap((p) => [r4(p.x), r4(p.y), r4(p.z)]);
-    const cat = res.handedness && res.handedness[k] && res.handedness[k][0];
-    l[k] = cat ? (cat.categoryName.toLowerCase().startsWith("r") ? 1 : 0) : -1;
-  });
-  let p = null;
-  if (S.deteccao === "v3" && S.pose) {
-    if (t - S.tPose >= POSE_CADA) {
-      try {
-        const rp = S.pose.detect(S.det);
-        const pts = rp.landmarks && rp.landmarks[0];
-        S.ultimaPose = pts ? pts.flatMap((q) => [r4(q.x), r4(q.y), r4(q.z),
-          r4(typeof q.visibility === "number" ? q.visibility : 1.0)]) : null;
-      } catch (e) { console.warn(e); S.ultimaPose = null; }
-      S.tPose = t;
-    }
-    p = S.ultimaPose;
-  }
-  const ms = performance.now() - tDet;
-  S.msDet = S.msDet ? 0.9 * S.msDet + 0.1 * ms : ms;
+  // o corpo muda devagar: a pose so a cada POSE_CADA (a ultima vale para os quadros do meio)
+  const comPose = S.deteccao === "v3";
+  const pose = comPose && t - S.tPose >= POSE_CADA;
+  if (pose) S.tPose = t;
+  S.detOcupado = true; S.tEnvioDet = performance.now();
+  createImageBitmap(S.det).then((img) => {
+    S.detector.postMessage({ tipo: "quadro", img, t, pose, a: r4(dw / dh) }, [img]);
+  }).catch((e) => { console.warn(e); S.detOcupado = false; });
+}
+
+function receberPontos(r) {
+  S.detOcupado = false;
+  if (r.pulado) return;
+  if (r.proc) S.proc = r.proc;
+  if (r.p !== undefined) S.ultimaPose = r.p;        // undefined: a pose nao foi pedida neste quadro
+  const p = S.deteccao === "v3" ? S.ultimaPose : null;
+  S.msDet = S.msDet ? 0.9 * S.msDet + 0.1 * r.ms : r.ms;
   S.nDet += 1;
-  // a decisao CPU x GPU fica aberta a sessao inteira: no comeco, sem maos no quadro, a CPU parece
-  // rapida; com as duas maos (palavras, calibrado) ela pode passar de 33 ms e derrubar para 15 quadros/s.
-  // O teste da GPU trava a imagem por ~1 s, entao so roda fora de uma gravacao.
-  if (S.autoProc && !S.testandoGPU && S.nDet >= 40 && S.msDet > MS_LENTO && !(S.est && S.est.gravando)) testarGPU();
   if (S.tAnt) {
-    const dt = t - S.tAnt;
+    const dt = r.t - S.tAnt;
     if (dt > 0 && dt < 1) S.fpsLocal = S.fpsLocal ? 0.9 * S.fpsLocal + 0.1 / dt : 1 / dt;
   }
-  S.tAnt = t;
-  S.visto = { m };
-  enfileirar({ t: Math.round(t * 1e6) / 1e6, a: r4(dw / dh), m, l, p });
+  S.tAnt = r.t;
+  S.visto = { m: r.m };
+  enfileirar({ t: Math.round(r.t * 1e6) / 1e6, a: r.a, m: r.m, l: r.l, p });
 }
 
 function enfileirar(q) {
@@ -589,7 +573,8 @@ function renderizar(e) {
   const anterior = S.est;
   S.est = e;
   if (e.modo !== S.modo) { S.modo = e.modo; ajustarDeteccao(e.modo); S.exemplo = null; }
-  ui.fps.textContent = `${(e.fps || S.fpsLocal || 0).toFixed(0)} fps${S.proc ? " · " + S.proc : ""}`;
+  ui.fps.textContent = `${(e.fps || S.fpsLocal || 0).toFixed(0)} fps${S.proc ? " · " + S.proc : ""}` +
+    (S.nDet ? ` · ${S.msDet.toFixed(0)} ms` : "");
   for (const b of ui.modos.querySelectorAll("button")) {
     b.classList.toggle("ativo", b.dataset.modo === e.modo);
     b.disabled = !(e.modos || []).includes(b.dataset.modo);
@@ -1206,7 +1191,7 @@ if (TESTE) {
   window.__libres = {
     estado: () => S.est,
     info: () => S.info,
-    processamento: () => ({ proc: S.proc, msDet: S.msDet, nDet: S.nDet, fpsLocal: S.fpsLocal }),
+    processamento: () => ({ proc: S.proc, msDet: S.msDet, nDet: S.nDet, fpsLocal: S.fpsLocal, worker: !!S.detector }),
     fila: () => S.fila.length,
     conectado: () => S.conectado,
     injetar: (quadros) => {                          // quadros prontos (sem camera): vao para a fila e para a tela
@@ -1217,17 +1202,12 @@ if (TESTE) {
     camera: () => ({ id: S.camAtual, nome: S.camNome, problema: S.problemaCam || "", lista: S.cameras.map((c) => c.label) }),
     comando,
     async detectarImagem(url, numHands = 2) {        // pontos do MediaPipe JS numa imagem (sem espelhar)
-      if (!S.maos) await criarDetectores();
-      S.autoProc = false;
+      if (!S.detPronto) await criarDetectores();
       const img = new Image(); img.src = url; await img.decode();
-      const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
-      c.getContext("2d").drawImage(img, 0, 0);
-      await S.maos.setOptions({ numHands }); S.numHands = numHands;
-      const r = S.maos.detect(c);
-      const rp = S.pose ? S.pose.detect(c) : null;
-      return { maos: r.landmarks.map((m) => m.map((p) => [p.x, p.y, p.z])),
-        lado: r.handedness.map((h) => h[0].categoryName),
-        pose: rp && rp.landmarks[0] ? rp.landmarks[0].map((p) => [p.x, p.y, p.z, p.visibility]) : null };
+      const bmp = await createImageBitmap(img);
+      const r = await pedirDetector({ tipo: "imagem", img: bmp, numHands }, [bmp]);
+      S.numHands = numHands;
+      return { maos: r.maos, lado: r.lado, pose: r.pose };
     },
   };
 }
