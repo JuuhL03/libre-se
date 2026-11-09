@@ -102,9 +102,14 @@ Conferido sem câmera de verdade: o motor web dá o mesmo texto que o app de
 computador com os mesmos quadros; os pontos do MediaPipe no navegador (CPU) são
 iguais aos do Python nas mesmas imagens (diferença < 0,0005); calibração,
 reconhecimento, queda e volta da internet e o layout de celular testados num
-Chromium automático. No aparelho, a página mede a velocidade e escolhe CPU (pontos
-idênticos aos do app) ou GPU (mais rápida, diferença de ~0,005, do tamanho do
-tremor normal do MediaPipe); para forçar: `?processamento=cpu` ou `gpu` no endereço.
+Chromium automático. O MediaPipe roda num Web Worker (`web/detector.js`), fora da
+thread que desenha a página: a imagem da câmera não trava enquanto as mãos e o corpo
+são detectados, e a detecção pega sempre o quadro mais novo (como o app móvel). Como no
+app, ela usa a GPU (diferença de ~0,005 para a CPU, do tamanho do tremor normal do
+MediaPipe) e cai para a CPU se a GPU falhar; `?processamento=cpu` no endereço força a
+CPU (pontos idênticos aos do app de computador). O canto da tela mostra os quadros/s
+que chegam ao servidor, CPU ou GPU e os ms de detecção por quadro. Precisa de
+OffscreenCanvas: Chrome, Edge, Firefox ou Safari 17 (iOS/macOS) ou mais novo.
 
 **Câmera:** sem escolha, a página usa a webcam de verdade: pula câmera ocupada,
 câmera virtual (OBS, NVIDIA Broadcast...) e câmera que manda imagem parada, preta
