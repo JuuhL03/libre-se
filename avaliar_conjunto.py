@@ -13,6 +13,8 @@ O treino, o aumento de dados e as sementes sao os de treino_v3.py / avaliar_v3.p
 Uso: python avaliar_conjunto.py --recortar --sem-mao-parada
 """
 import argparse
+import json
+from pathlib import Path
 import time
 from collections import Counter
 
@@ -56,9 +58,21 @@ def main() -> None:
 
     ids = sorted(set(sinal.tolist()))
     print(f"\n  {len(ids)} rodadas. Cada rodada leva varios minutos. Nao aperte Ctrl+C.")
+    # parcial: cada rodada pronta fica gravada; se o programa parar, a proxima execucao continua dali
+    parcial = Path(__file__).with_name(
+        f"avaliacao_conjunto_parcial{'_r' if args.recortar else ''}{'_m' if args.sem_mao_parada else ''}.json")
+    feito = json.loads(parcial.read_text()) if parcial.exists() else {}
+    if feito:
+        print(f"  continuando: {len(feito)} rodadas ja feitas ({', '.join(sorted(feito))})")
     reg = []                      # (pessoa, real, previsto, aceito)
     accs = {}
+    for sid, dados in sorted(feito.items()):
+        accs[sid] = dados["acc"]
+        reg += [tuple(r) for r in dados["reg"]]
     for k, sid in enumerate(ids, 1):
+        if sid in feito:
+            print(f"  [{k:2d}/{len(ids)}] {sid}: acc={accs[sid] * 100:5.1f}%  (ja feita)")
+            continue
         te = np.where(sinal == sid)[0]
         tr = np.where(sinal != sid)[0]
         te = te[np.isin(y[te], np.unique(y[tr]))]
@@ -78,6 +92,8 @@ def main() -> None:
             aceito = accept_word(top, args.min_conf, args.min_margem) is not None
             reg.append((sid, int(y[j]), int(pred[i]), aceito))
         accs[sid] = accuracy_score(y[te], pred)
+        feito[sid] = {"acc": float(accs[sid]), "reg": [list(r) for r in reg if r[0] == sid]}
+        parcial.write_text(json.dumps(feito))
         bal = balanced_accuracy_score(y[te], pred)
         print(f"  [{k:2d}/{len(ids)}] {sid}: acc={accs[sid] * 100:5.1f}%  bal_acc={bal * 100:5.1f}%  "
               f"({len(te)} sinais, {time.time() - t0:.0f}s)", flush=True)
